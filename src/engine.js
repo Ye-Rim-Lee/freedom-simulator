@@ -249,6 +249,39 @@ function simOnePath({ retPath, common, people, adv, tRet }) {
   return { path, survived: !depleted };
 }
 
+// 평균치 결정론(변동성 0, 침체는 결정론적으로 적용)으로 가장 이른 은퇴 가능 나이.
+function deterministicRetPath(common, adv, years) {
+  const ret = common.ret / 100;
+  const path = new Array(years + 1).fill(ret);
+  if (adv.recession.on && adv.recession.every > 0) {
+    for (let t = adv.recession.every; t <= years; t += adv.recession.every) path[t] = -adv.recession.drop / 100;
+  }
+  return path;
+}
+export function computeEarliestDet(common, people, adv) {
+  const startAge = people[0].age;
+  const years = (people[0].life || 100) - startAge;
+  const retPath = deterministicRetPath(common, adv, years);
+  for (let tr = 0; tr <= years; tr++) {
+    if (simOnePath({ retPath, common, people, adv, tRet: tr }).survived) return startAge + tr;
+  }
+  return null;
+}
+
+// 매달 +X만원 더 모으면 은퇴를 몇 년 앞당기는지. 가장 작은 X 1개를 반환.
+const NUDGE_STEPS = [10, 20, 30, 50, 80, 120, 200, 300, 500];
+export function nudgeMonthlySavings(common, people, adv, currentEarliest) {
+  if (currentEarliest == null) return null;
+  for (const monthly of NUDGE_STEPS) {
+    const boosted = people.map((p) => ({ ...p, income: p.income + monthly * 12 }));
+    const e = computeEarliestDet(common, boosted, adv);
+    if (e != null && currentEarliest - e >= 1) {
+      return { monthly, yearsEarlier: currentEarliest - e };
+    }
+  }
+  return null;
+}
+
 export function runMonteCarlo(common, people, adv, runs = 1000) {
   const startAge = people[0].age;
   const years = (people[0].life || 100) - startAge;

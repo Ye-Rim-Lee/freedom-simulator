@@ -7,10 +7,10 @@ import {
   Users, User, ChevronLeft, Sliders, BarChart3, Table2, Sparkles, TrendingUp,
   Settings2, Share2, Plus, X, Copy, Check, Info as InfoIcon,
 } from "lucide-react";
-import { won, yAxisFmt } from "./format.js";
+import { won, yAxisFmt, parseMoneyMan } from "./format.js";
 import {
   COMMON0, ME0, SPOUSE0, SOLO0, ADV0,
-  equityWeight, useEngine, useMonteCarlo, validateInputs,
+  equityWeight, useEngine, useMonteCarlo, validateInputs, nudgeMonthlySavings,
 } from "./engine.js";
 
 /* ───────────── 공용 컴포넌트 ───────────── */
@@ -32,6 +32,37 @@ function Info({ children }) {
 }
 function LabelWithInfo({ label, info }) {
   return <span className="inline-flex items-center">{label}{info && <Info>{info}</Info>}</span>;
+}
+
+function MoneyInput({ label, value, onChange, info, hintAvg, unit = "만원" }) {
+  const [raw, setRaw] = useState(value ? String(value) : "");
+  const [focused, setFocused] = useState(false);
+  useEffect(() => { if (!focused) setRaw(value ? String(value) : ""); }, [value, focused]);
+  const parsed = parseMoneyMan(raw);
+  const valid = parsed != null;
+  const showPreview = focused && raw && valid && /[억천백만]/.test(raw);
+  return (
+    <label className="block">
+      <div className="flex justify-between items-baseline mb-1">
+        <span className="text-[11px] font-medium text-slate-500"><LabelWithInfo label={label} info={info} /></span>
+        {hintAvg != null && (
+          <button type="button" onClick={() => { setRaw(String(hintAvg)); onChange(hintAvg); }}
+            className="text-[10px] text-emerald-700 hover:underline">평균값</button>
+        )}
+      </div>
+      <div className={`flex items-center rounded-lg bg-amber-50 ring-1 ${valid ? "ring-amber-200 focus-within:ring-2 focus-within:ring-emerald-400" : "ring-red-300"} transition`}>
+        <input type="text" inputMode="decimal" value={raw}
+          onFocus={() => setFocused(true)}
+          onBlur={() => { setFocused(false); if (valid) { setRaw(String(parsed)); onChange(parsed); } }}
+          onChange={(e) => { setRaw(e.target.value); const p = parseMoneyMan(e.target.value); if (p != null) onChange(p); }}
+          placeholder="예: 1.2억"
+          className="w-full bg-transparent px-2.5 py-2 text-sm text-slate-900 tabular-nums outline-none" />
+        <span className="pr-2.5 text-[11px] text-slate-400 whitespace-nowrap">{unit}</span>
+      </div>
+      {showPreview && <div className="text-[10px] text-emerald-700 mt-1 tabular-nums">= {won(parsed)}</div>}
+      {!valid && raw && <div className="text-[10px] text-red-500 mt-1">숫자나 '1.2억'/'5000만' 형태로 입력해 주세요.</div>}
+    </label>
+  );
 }
 
 function Num({ label, value, onChange, unit, step = 1, info }) {
@@ -182,7 +213,7 @@ function EasyResults({ eng, mc, mcPending, mode, people }) {
   const scopeData = eng.scope(mode === "single" ? 0 : "hh");
   return (
     <div className="space-y-4">
-      <MonteCarloCard mc={mc} pending={mcPending} eng={eng} />
+      <MonteCarloCard mc={mc} pending={mcPending} eng={eng} nudge={nudge} />
       <button onClick={() => setOpen((o) => !o)}
         className="w-full rounded-xl bg-white ring-1 ring-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 flex items-center justify-between">
         <span>{open ? "근거 접기" : "왜요? — 자세히 보기"}</span>
@@ -233,7 +264,7 @@ function Results({ eng, mc, mcPending, mode, people }) {
       </div>
       {goal === "retire" ? (
         <>
-          <MonteCarloCard mc={mc} pending={mcPending} eng={eng} />
+          <MonteCarloCard mc={mc} pending={mcPending} eng={eng} nudge={nudge} />
           <Card>
             <div className="flex items-baseline justify-between mb-1">
               <div className="text-xs font-medium text-slate-500">예상 은퇴 가능 나이 <span className="text-slate-400">· 평균 수익률 기준</span></div>
@@ -278,7 +309,7 @@ function Results({ eng, mc, mcPending, mode, people }) {
     </div>
   );
 }
-function MonteCarloCard({ mc, pending, eng }) {
+function MonteCarloCard({ mc, pending, eng, nudge }) {
   if (!mc) {
     return (
       <Card title="몬테카를로 (수익률 변동 반영)" accent="#7c3aed" icon={Sparkles}>
@@ -318,6 +349,12 @@ function MonteCarloCard({ mc, pending, eng }) {
         <BandChart bands={bands} earliest={eng.earliest} />
         <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">짙은 띠 = 자산 50% 시나리오 / 옅은 띠 = 10~90%. 띠가 0에 닿으면 그 시점에 자산 고갈 위험이 생겨요. {pending && <span className="text-violet-600">· 갱신 중…</span>}</p>
       </div>
+      {nudge && (
+        <div className="mt-3 rounded-lg bg-emerald-50 ring-1 ring-emerald-200 p-2.5 text-[12px] text-slate-700 flex items-start gap-2">
+          <span className="text-emerald-600 text-base leading-none mt-0.5">💡</span>
+          <span><b className="text-emerald-700">매달 +{nudge.monthly}만원</b> 더 모으면 (평균 시나리오 기준) 약 <b>{nudge.yearsEarlier}년</b> 더 빨리 자유로워져요.</span>
+        </div>
+      )}
     </Card>
   );
 }
@@ -570,13 +607,19 @@ function AllocCard({ common, setCommon, age, retireAge }) {
 
 /* ───────────── 쉬움 모드 입력 ───────────── */
 function EasyInputs({ people, setPerson, setExp }) {
+  const monthlyAvg = people.length > 1 ? 280 : 180; // 통계청 가계동향 근사 (1인 ≈ 180, 2인 ≈ 280)
   const personCard = (p, idx, accent) => (
     <Card key={idx} title={p.name} accent={accent}>
       <div className="grid grid-cols-2 gap-3">
         <Num label="현재 나이" value={p.age} onChange={(v) => setPerson(idx, "age", v)} unit="세" />
-        <Num label="현재 자산" value={p.asset} onChange={(v) => setPerson(idx, "asset", v)} unit="만원" />
-        <Num label="월 생활비" value={p.exp.now} onChange={(v) => { setExp(idx, "now", v); setExp(idx, "std", v); setExp(idx, "lean", Math.round(v * 0.65)); setExp(idx, "fat", Math.round(v * 1.8)); }} unit="만원/월" />
-        <Num label="연 소득 (세후)" value={p.income} onChange={(v) => setPerson(idx, "income", v)} unit="만원/년" />
+        <MoneyInput label="현재 자산" value={p.asset} onChange={(v) => setPerson(idx, "asset", v)}
+          info={<>예금·주식·부동산·전세금 등 합계(만원). '1.2억', '5000만' 식으로 입력해도 돼요.</>} />
+        <MoneyInput label="월 생활비" value={p.exp.now} unit="만원/월"
+          hintAvg={monthlyAvg}
+          onChange={(v) => { setExp(idx, "now", v); setExp(idx, "std", v); setExp(idx, "lean", Math.round(v * 0.65)); setExp(idx, "fat", Math.round(v * 1.8)); }}
+          info={<>월 평균 지출(주거·식비·통신·여가 등). 잘 모르겠으면 오른쪽 '평균값'을 눌러보세요.</>} />
+        <MoneyInput label="연 소득 (세후)" value={p.income} onChange={(v) => setPerson(idx, "income", v)} unit="만원/년"
+          info={<>세금·국민연금·건강보험 다 떼고 손에 쥐는 한 해 총액.</>} />
       </div>
     </Card>
   );
@@ -596,8 +639,8 @@ function Inputs({ common, setCommon, people, setPerson, setExp, adv, setAdv }) {
     <Card key={idx} title={p.name} accent={accent}>
       <div className="grid grid-cols-2 gap-3">
         <Num label="현재 나이" value={p.age} onChange={(v) => setPerson(idx, "age", v)} unit="세" />
-        <Num label="현재 자산" value={p.asset} onChange={(v) => setPerson(idx, "asset", v)} unit="만원" />
-        <Num label="연 소득 (세후)" value={p.income} onChange={(v) => setPerson(idx, "income", v)} unit="만원/년" />
+        <MoneyInput label="현재 자산" value={p.asset} onChange={(v) => setPerson(idx, "asset", v)} />
+        <MoneyInput label="연 소득 (세후)" value={p.income} onChange={(v) => setPerson(idx, "income", v)} unit="만원/년" />
         <Num label="연평균 수입 증가율" value={p.growth} onChange={(v) => setPerson(idx, "growth", v)} unit="%" />
         <Num label="예상 정년 (은퇴)" value={p.retireAge} onChange={(v) => setPerson(idx, "retireAge", v)} unit="세" />
         {idx === 0 && <Num label="예상 수명" value={p.life} onChange={(v) => setPerson(idx, "life", v)} unit="세" />}
@@ -772,6 +815,7 @@ export default function App() {
   const eng = useEngine(common, people, adv);
   const { mc, pending: mcPending } = useMonteCarlo(common, people, adv, { enabled: !!mode });
   const warnings = useMemo(() => (mode ? validateInputs(common, people, adv) : []), [mode, common, people, adv]);
+  const nudge = useMemo(() => (mode && eng.earliest != null ? nudgeMonthlySavings(common, people, adv, eng.earliest) : null), [mode, common, people, adv, eng.earliest]);
   if (!mode) return <ModeSelect onPick={pick} />;
 
   const tabs = [
