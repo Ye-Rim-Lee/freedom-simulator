@@ -133,44 +133,83 @@ function Select({ label, value, onChange, options }) {
   );
 }
 
-/* ───────────── 온보딩 위저드 ───────────── */
-function Wizard({ people, setPerson, setExp, onComplete, onSkip }) {
-  const [step, setStep] = useState(0); // 0 = person 0, 1 = person 1 (couple만)
-  const total = people.length;
-  const p = people[step];
-  const monthlyAvg = total > 1 ? 280 : 180;
-  const next = () => {
-    if (step + 1 < total) setStep(step + 1);
-    else onComplete();
+/* ───────────── 온보딩 위저드 (대화체) ───────────── */
+function buildWizardQuestions(people, mode) {
+  const monthlyAvg = mode === "couple" ? 280 : 180;
+  const Q = [];
+  people.forEach((p, i) => {
+    const me = i === 0;
+    Q.push({
+      idx: i, field: "age", type: "num", unit: "세",
+      title: me ? "안녕하세요. 몇 살이세요?" : `${p.name} 분은 몇 살이세요?`,
+      sub: "현재 나이만 적어주세요. 정년·수명은 자동으로 채워요.",
+    });
+    Q.push({
+      idx: i, field: "asset", type: "money",
+      title: me ? "현재 자산은 얼마쯤이에요?" : `${p.name} 분 자산은요?`,
+      sub: "예금·주식·부동산·전세금 다 합쳐서요. '1.2억', '5000만' 식으로 입력해도 돼요.",
+    });
+    Q.push({
+      idx: i, field: "exp", type: "money", unit: "만원/월", hintAvg: monthlyAvg,
+      title: me ? "한 달에 보통 얼마 쓰세요?" : `${p.name} 분 월 생활비는요?`,
+      sub: "주거·식비·통신·여가 등 한 달 평균. 모르겠으면 '평균값'을 눌러도 돼요.",
+    });
+    Q.push({
+      idx: i, field: "income", type: "money", unit: "만원/년",
+      title: me ? "연 소득은 얼마예요? (세후)" : `${p.name} 분 연 소득은요?`,
+      sub: "세금·국민연금·건강보험 다 떼고 손에 쥐는 한 해 총액.",
+    });
+  });
+  return Q;
+}
+
+function Wizard({ people, setPerson, setExp, mode, onComplete, onSkip }) {
+  const questions = useMemo(() => buildWizardQuestions(people, mode), [people, mode]);
+  const [step, setStep] = useState(0);
+  const total = questions.length;
+  const q = questions[step];
+  const p = people[q.idx];
+  const value = q.field === "exp" ? p.exp.now : p[q.field];
+  const setValue = (v) => {
+    if (q.field === "exp") {
+      setExp(q.idx, "now", v);
+      setExp(q.idx, "std", v);
+      setExp(q.idx, "lean", Math.round(v * 0.65));
+      setExp(q.idx, "fat", Math.round(v * 1.8));
+    } else {
+      setPerson(q.idx, q.field, v);
+    }
   };
+  const next = () => { if (step + 1 < total) setStep(step + 1); else onComplete(); };
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
       <div className="max-w-md w-full mx-auto px-5 py-8 flex-1 flex flex-col">
         <button onClick={onSkip} className="self-end text-[12px] text-slate-400 hover:text-slate-600">건너뛰고 결과 보기 →</button>
-        <div className="mt-2 flex gap-1.5 justify-center">
+        <div className="mt-2 flex gap-1 justify-center">
           {Array.from({ length: total }).map((_, i) => (
-            <span key={i} className="h-1 rounded-full transition-all" style={{ width: i === step ? 28 : 12, background: i <= step ? "#059669" : "#cbd5e1" }} />
+            <span key={i} className="h-1 rounded-full transition-all"
+              style={{ width: i === step ? 24 : 10, background: i <= step ? "#059669" : "#cbd5e1" }} />
           ))}
         </div>
-        <div className="text-center mt-6">
-          <div className="text-[12px] font-semibold text-emerald-700">{step + 1} / {total}</div>
-          <h2 className="text-2xl font-extrabold text-slate-900 mt-1">{p.name}의 핵심 4가지</h2>
-          <p className="text-[13px] text-slate-500 mt-2 leading-relaxed">정확하지 않아도 괜찮아요. 잘 모르겠으면 '평균값'을 누르거나 빈칸으로 두고 다음으로 가도 돼요.</p>
+        <div className="text-center mt-8">
+          <div className="text-[11px] font-semibold text-emerald-700 tracking-wide">{step + 1} / {total}</div>
+          <h2 className="text-2xl font-extrabold text-slate-900 mt-2 leading-snug">{q.title}</h2>
+          <p className="text-[13px] text-slate-500 mt-3 leading-relaxed">{q.sub}</p>
         </div>
-        <div className="mt-7 space-y-4">
-          <Num label="현재 나이" value={p.age} onChange={(v) => setPerson(step, "age", v)} unit="세" />
-          <MoneyInput label="현재 자산 (예금·주식·부동산 합산)" value={p.asset} onChange={(v) => setPerson(step, "asset", v)} />
-          <MoneyInput label="월 생활비" value={p.exp.now} unit="만원/월" hintAvg={monthlyAvg}
-            onChange={(v) => { setExp(step, "now", v); setExp(step, "std", v); setExp(step, "lean", Math.round(v * 0.65)); setExp(step, "fat", Math.round(v * 1.8)); }} />
-          <MoneyInput label="연 소득 (세후)" value={p.income} onChange={(v) => setPerson(step, "income", v)} unit="만원/년" />
+        <div className="mt-8">
+          {q.type === "num" ? (
+            <Num label="" value={value} onChange={setValue} unit={q.unit} />
+          ) : (
+            <MoneyInput label="" value={value} onChange={setValue} unit={q.unit || "만원"} hintAvg={q.hintAvg} />
+          )}
         </div>
-        <div className="mt-auto pt-8 flex gap-2">
+        <div className="mt-auto pt-10 flex gap-2">
           {step > 0 && <button onClick={() => setStep(step - 1)} className="px-4 py-3 rounded-xl bg-white ring-1 ring-slate-200 text-sm font-semibold text-slate-700">이전</button>}
           <button onClick={next} className="flex-1 py-3 rounded-xl bg-emerald-600 text-white text-sm font-bold shadow-sm hover:bg-emerald-700">
-            {step + 1 < total ? "다음 →" : "결과 보기"}
+            {step + 1 < total ? "다음 →" : "결과 보기 →"}
           </button>
         </div>
-        <p className="text-center text-[11px] text-slate-400 mt-4">언제든 위쪽 <b>전문가</b> 토글로 정년·수익률·자산배분 등 세부 입력을 켤 수 있어요.</p>
+        <p className="text-center text-[11px] text-slate-400 mt-4">정확하지 않아도 괜찮아요. 결과 화면에서 칩으로 언제든 고칠 수 있어요.</p>
       </div>
     </div>
   );
@@ -357,9 +396,69 @@ function NarrativeChart({ bands, ageNow, ageFree, retRows }) {
   );
 }
 
-function NarrativeResults({ eng, mc, mcPending, mode, people, common, adv, nudge, view }) {
+function InputChip({ label, onClick, active }) {
+  return (
+    <button onClick={onClick}
+      className={`px-2.5 py-1 rounded-full text-[12px] tabular-nums transition ring-1 ${active ? "bg-emerald-50 ring-emerald-400 text-emerald-700" : "bg-white ring-slate-200 text-slate-700 hover:ring-slate-400"}`}>
+      {label}
+    </button>
+  );
+}
+
+function ChipEditor({ field, person, idx, setPerson, setExp, onClose }) {
+  const labelMap = {
+    age: "현재 나이",
+    asset: "현재 자산",
+    income: "연 소득 (세후)",
+    "exp.now": "월 생활비",
+  };
+  return (
+    <div className="rounded-xl bg-emerald-50 ring-1 ring-emerald-200 p-3 mb-3">
+      <div className="flex justify-between items-baseline mb-2">
+        <span className="text-[12px] font-semibold text-slate-700">{person.name} · {labelMap[field]}</span>
+        <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-lg leading-none px-1">×</button>
+      </div>
+      {field === "age" && (
+        <Num label="" value={person.age} onChange={(v) => setPerson(idx, "age", v)} unit="세" />
+      )}
+      {field === "asset" && (
+        <MoneyInput label="" value={person.asset} onChange={(v) => setPerson(idx, "asset", v)} />
+      )}
+      {field === "income" && (
+        <MoneyInput label="" value={person.income} onChange={(v) => setPerson(idx, "income", v)} unit="만원/년" />
+      )}
+      {field === "exp.now" && (
+        <MoneyInput label="" value={person.exp.now} unit="만원/월"
+          onChange={(v) => { setExp(idx, "now", v); setExp(idx, "std", v); setExp(idx, "lean", Math.round(v * 0.65)); setExp(idx, "fat", Math.round(v * 1.8)); }} />
+      )}
+    </div>
+  );
+}
+
+function InputChips({ people, editing, onEdit }) {
+  return (
+    <div className="flex flex-wrap gap-1.5 justify-center">
+      {people.map((p, i) => (
+        <React.Fragment key={i}>
+          {people.length > 1 && (
+            <span className="text-[11px] font-semibold text-slate-500 self-center px-1">{p.name}</span>
+          )}
+          <InputChip label={`${p.age}세`} onClick={() => onEdit(i, "age")} active={editing?.idx === i && editing.field === "age"} />
+          <InputChip label={won(p.asset)} onClick={() => onEdit(i, "asset")} active={editing?.idx === i && editing.field === "asset"} />
+          <InputChip label={`월 ${won(p.exp.now)}`} onClick={() => onEdit(i, "exp.now")} active={editing?.idx === i && editing.field === "exp.now"} />
+          <InputChip label={`연 ${won(p.income)}`} onClick={() => onEdit(i, "income")} active={editing?.idx === i && editing.field === "income"} />
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+function NarrativeResults({ eng, mc, mcPending, mode, people, common, adv, setCommon, setPerson, setExp, setAdv, nudge, view }) {
   const [detailsOpen, setDetailsOpen] = useState(view === "expert");
+  const [accurateOpen, setAccurateOpen] = useState(view === "expert");
+  const [optionsOpen, setOptionsOpen] = useState(view === "expert");
   const [scopeWho, setScopeWho] = useState(mode === "couple" ? "hh" : 0);
+  const [editing, setEditing] = useState(null);
   const scopeData = eng.scope(scopeWho);
   const ageMain = mc?.earliestByConfidence.p50 ?? eng.earliest;
   const ageSafe = mc?.earliestByConfidence.p85;
@@ -367,8 +466,25 @@ function NarrativeResults({ eng, mc, mcPending, mode, people, common, adv, nudge
   const succ = mc ? Math.round(mc.successPct * 100) : null;
   const grade = getReadinessGrade(mc?.successPct);
 
+  const fold = (label, open, setOpen, children) => (
+    <div className="rounded-2xl bg-white ring-1 ring-slate-200">
+      <button onClick={() => setOpen(!open)} className="w-full px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 flex items-center justify-between rounded-2xl">
+        <span>{label}</span>
+        <span className="text-slate-400">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && <div className="px-4 pb-4 pt-1 space-y-3 border-t border-slate-100">{children}</div>}
+    </div>
+  );
+
   return (
     <div className="space-y-4">
+      {/* 입력 칩 */}
+      <InputChips people={people} editing={editing} onEdit={(i, f) => setEditing({ idx: i, field: f })} />
+      {editing && (
+        <ChipEditor field={editing.field} person={people[editing.idx]} idx={editing.idx}
+          setPerson={setPerson} setExp={setExp} onClose={() => setEditing(null)} />
+      )}
+
       {/* 헤드라인 */}
       <section className="text-center py-5 px-3">
         <div className="text-[12px] text-slate-500 mb-2 tracking-wide">예상 은퇴 가능 나이</div>
@@ -418,10 +534,51 @@ function NarrativeResults({ eng, mc, mcPending, mode, people, common, adv, nudge
         <p className="text-[11px] text-slate-400 mt-3 leading-relaxed">슬라이더는 시뮬레이션용이라 위 결과는 그대로예요. 실제로 적용하려면 입력 탭에서 값을 바꿔주세요.</p>
       </Card>
 
-      {/* 접힘 — 세부 */}
+      {/* 더 정확하게 */}
+      {fold("더 정확하게 — 정년·수익률·자산배분", accurateOpen, setAccurateOpen, (
+        <>
+          {people.map((p, i) => (
+            <div key={i} className="grid grid-cols-2 gap-3">
+              <Num label={`${p.name} 정년`} value={p.retireAge} onChange={(v) => setPerson(i, "retireAge", v)} unit="세" />
+              <Num label={`${p.name} 연 수입 증가율`} value={p.growth} onChange={(v) => setPerson(i, "growth", v)} unit="%" />
+              {i === 0 && <Num label="예상 수명" value={p.life} onChange={(v) => setPerson(i, "life", v)} unit="세" />}
+              <Num label={`${p.name} 연 비정기 지출`} value={p.irr} onChange={(v) => setPerson(i, "irr", v)} unit="만원/년"
+                info={<>여행·차량 교체·의료·경조사·집수리 같은 1년 합계.</>} />
+            </div>
+          ))}
+          <div className="rounded-lg ring-1 ring-slate-200 p-3 bg-slate-50">
+            <div className="text-[11px] font-semibold text-slate-500 mb-2">수익률·변동성 프리셋</div>
+            <div className="grid grid-cols-3 gap-1.5">
+              {[["조심형", { ret: 5, vol: 15, swr: 3.5 }], ["평균 (한국)", { ret: 7, vol: 18, swr: 4.0 }], ["낙관 (미국 ETF)", { ret: 9, vol: 20, swr: 4.5 }]].map(([lbl, p]) => (
+                <button key={lbl} onClick={() => { Object.entries(p).forEach(([k, v]) => setCommon(k, v)); }}
+                  className="py-1.5 rounded-md bg-white ring-1 ring-slate-200 text-[12px] font-semibold text-slate-700 hover:ring-emerald-400">{lbl}</button>
+              ))}
+            </div>
+          </div>
+          <Slide label="위험자산 수익률 (연평균)" value={common.ret} onChange={(v) => setCommon("ret", v)} min={0} max={15} step={0.5} unit="%" />
+          <Slide label="위험자산 변동성" value={common.vol ?? 18} onChange={(v) => setCommon("vol", v)} min={0} max={35} step={1} unit="%" />
+          <Slide label="인출률 SWR" value={common.swr} onChange={(v) => setCommon("swr", v)} min={2.5} max={6} step={0.1} unit="%"
+            info={<>4% = 자산의 25배가 1년 생활비. 자세한 건 입력 도움말 참고.</>} />
+          <Slide label="연 운용보수" value={common.fee ?? 0.5} onChange={(v) => setCommon("fee", v)} min={0} max={2} step={0.05} unit="%" />
+          <Slide label="생활비 증가율" value={common.expg} onChange={(v) => setCommon("expg", v)} min={0} max={8} step={0.1} unit="%" />
+          <Slide label="물가상승률" value={common.infl} onChange={(v) => setCommon("infl", v)} min={0} max={6} step={0.1} unit="%" />
+          <Toggle on={common.swrAdjust ?? true} onChange={(v) => setCommon("swrAdjust", v)} label="기간보정 SWR (은퇴 길수록 인출률 ↓)" />
+          <AllocCard common={common} setCommon={setCommon} age={people[0].age} retireAge={people[0].retireAge} />
+        </>
+      ))}
+
+      {/* 세부 옵션 */}
+      {fold("세부 옵션 — 연금·부동산·세금·소비곡선·시나리오", optionsOpen, setOptionsOpen, (
+        <>
+          <TaxCard common={common} setCommon={setCommon} />
+          <Advanced adv={adv} setAdv={setAdv} people={people} common={common} setCommon={setCommon} />
+        </>
+      ))}
+
+      {/* FIRE 사다리·세부 */}
       <button onClick={() => setDetailsOpen((o) => !o)}
         className="w-full rounded-xl bg-white ring-1 ring-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 flex items-center justify-between">
-        <span>{detailsOpen ? "FIRE 사다리·세부 닫기" : "FIRE 사다리·세부 보기"}</span>
+        <span>{detailsOpen ? "FIRE 사다리 닫기" : "FIRE 사다리·연도별 표 보기"}</span>
         <span className="text-slate-400">{detailsOpen ? "▲" : "▼"}</span>
       </button>
       {detailsOpen && (
@@ -700,33 +857,6 @@ function AllocCard({ common, setCommon, age, retireAge }) {
 }
 
 /* ───────────── 쉬움 모드 입력 ───────────── */
-function EasyInputs({ people, setPerson, setExp }) {
-  const monthlyAvg = people.length > 1 ? 280 : 180; // 통계청 가계동향 근사 (1인 ≈ 180, 2인 ≈ 280)
-  const personCard = (p, idx, accent) => (
-    <Card key={idx} title={p.name} accent={accent}>
-      <div className="grid grid-cols-2 gap-3">
-        <Num label="현재 나이" value={p.age} onChange={(v) => setPerson(idx, "age", v)} unit="세" />
-        <MoneyInput label="현재 자산" value={p.asset} onChange={(v) => setPerson(idx, "asset", v)}
-          info={<>예금·주식·부동산·전세금 등 합계(만원). '1.2억', '5000만' 식으로 입력해도 돼요.</>} />
-        <MoneyInput label="월 생활비" value={p.exp.now} unit="만원/월"
-          hintAvg={monthlyAvg}
-          onChange={(v) => { setExp(idx, "now", v); setExp(idx, "std", v); setExp(idx, "lean", Math.round(v * 0.65)); setExp(idx, "fat", Math.round(v * 1.8)); }}
-          info={<>월 평균 지출(주거·식비·통신·여가 등). 잘 모르겠으면 오른쪽 '평균값'을 눌러보세요.</>} />
-        <MoneyInput label="연 소득 (세후)" value={p.income} onChange={(v) => setPerson(idx, "income", v)} unit="만원/년"
-          info={<>세금·국민연금·건강보험 다 떼고 손에 쥐는 한 해 총액.</>} />
-      </div>
-    </Card>
-  );
-  return (
-    <div className="space-y-4">
-      {people.map((p, i) => personCard(p, i, "#475569"))}
-      <div className="rounded-2xl bg-emerald-50 ring-1 ring-emerald-200 p-3 text-[12px] text-slate-700 leading-relaxed">
-        쉬움 모드는 핵심 4개 값만 받고 나머지(정년 55세 · 수명 100세 · 수익률 7%·변동성 18% · 자산배분 110−나이 · 세금·건보료·운용보수)는 한국 평균치로 자동 채워요. 좀 더 정교하게 보고 싶으면 위 <b>전문가</b>를 눌러보세요.
-      </div>
-    </div>
-  );
-}
-
 /* ───────────── 연금 추정 도우미 ───────────── */
 function PensionHelper({ onApply }) {
   const [open, setOpen] = useState(false);
@@ -758,77 +888,6 @@ function PensionHelper({ onApply }) {
           </button>
         </div>
       )}
-    </div>
-  );
-}
-
-/* ───────────── 입력 ───────────── */
-function Inputs({ common, setCommon, people, setPerson, setExp, adv, setAdv }) {
-  const personCard = (p, idx, accent) => (
-    <Card key={idx} title={p.name} accent={accent}>
-      <div className="grid grid-cols-2 gap-3">
-        <Num label="현재 나이" value={p.age} onChange={(v) => setPerson(idx, "age", v)} unit="세" />
-        <MoneyInput label="현재 자산" value={p.asset} onChange={(v) => setPerson(idx, "asset", v)} />
-        <MoneyInput label="연 소득 (세후)" value={p.income} onChange={(v) => setPerson(idx, "income", v)} unit="만원/년" />
-        <Num label="연평균 수입 증가율" value={p.growth} onChange={(v) => setPerson(idx, "growth", v)} unit="%" />
-        <Num label="예상 정년 (은퇴)" value={p.retireAge} onChange={(v) => setPerson(idx, "retireAge", v)} unit="세" />
-        {idx === 0 && <Num label="예상 수명" value={p.life} onChange={(v) => setPerson(idx, "life", v)} unit="세" />}
-        {adv.pension.on && <Num label="연금 개시" value={p.pensionAge} onChange={(v) => setPerson(idx, "pensionAge", v)} unit="세" />}
-        {adv.pension.on && <Num label="연금 수령액" value={p.pension} onChange={(v) => setPerson(idx, "pension", v)} unit="만원/년" />}
-      </div>
-      {adv.pension.on && <PensionHelper onApply={(annual, startAge) => { setPerson(idx, "pension", annual); setPerson(idx, "pensionAge", startAge); }} />}
-    </Card>
-  );
-  return (
-    <div className="space-y-4">
-      {people.map((p, i) => personCard(p, i, "#475569"))}
-      <Card title="생활비 (만원, 현재가치)" accent="#0f172a">
-        <div className="text-[11px] font-semibold text-slate-400 mb-2">월 생활비</div>
-        <div className="grid gap-x-3 gap-y-2" style={{ gridTemplateColumns: `auto repeat(${people.length},1fr)` }}>
-          <div />
-          {people.map((p, i) => <div key={i} className="text-[11px] font-bold text-slate-500 text-center">{p.name}</div>)}
-          {[["now", "현재"], ["lean", "Lean"], ["std", "Standard"], ["fat", "Fat"]].map(([k, lab]) => (
-            <React.Fragment key={k}>
-              <div className="text-[11px] font-medium text-slate-500 self-center">{lab}</div>
-              {people.map((p, i) => <MiniInput key={i} value={p.exp[k]} onChange={(v) => setExp(i, k, v)} />)}
-            </React.Fragment>
-          ))}
-        </div>
-        <p className="text-[11px] text-slate-400 mt-2">현재=실제 지출 / Lean·Standard·Fat=각 FIRE 목표의 생활 수준</p>
-        <div className="border-t border-slate-100 mt-3 pt-3">
-          <div className="text-[11px] font-semibold text-slate-400 mb-2">연 비정기 지출 (만원/년)</div>
-          <div className="grid gap-x-3 gap-y-2 items-center" style={{ gridTemplateColumns: `auto repeat(${people.length},1fr)` }}>
-            <div className="text-[11px] font-medium text-slate-500">연 합계</div>
-            {people.map((p, i) => <MiniInput key={i} value={p.irr} onChange={(v) => setPerson(i, "irr", v)} />)}
-          </div>
-          <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">여행·차량 교체·의료·경조사·집수리처럼 매달은 아니지만 가끔 나가는 목돈의 1년 합계예요.</p>
-        </div>
-      </Card>
-      <Card title="투자 · 경제 가정" accent="#0f172a">
-        <div className="space-y-4">
-          <Slide label="위험자산 수익률 (연평균)" value={common.ret} onChange={(v) => setCommon("ret", v)} min={0} max={15} step={0.5} unit="%"
-            info={<>장기 평균 기대수익. S&P500 명목 평균 ≈ 10%, 국내 주식 ≈ 7~8%. 비관적이면 5~6%, 낙관 8~9%.</>} />
-          <Slide label="위험자산 변동성 (표준편차)" value={common.vol ?? 18} onChange={(v) => setCommon("vol", v)} min={0} max={35} step={1} unit="%"
-            info={<>연 수익률이 평균값에서 얼마나 출렁이는지(σ). S&P500 ≈ 15~18%, 한국 주식 ≈ 20%. 0이면 매년 평균값 그대로 = 결정론.</>} />
-          <Slide label="생활비 증가율 (연)" value={common.expg} onChange={(v) => setCommon("expg", v)} min={0} max={8} step={0.1} unit="%"
-            info={<>장기 생활비·FIRE 목표선 상승률. 보통 임금·서비스물가가 일반 물가보다 약간 빠름.</>} />
-          <Slide label="물가상승률 (연)" value={common.infl} onChange={(v) => setCommon("infl", v)} min={0} max={6} step={0.1} unit="%" />
-          <Slide label="인출률 SWR (연)" value={common.swr} onChange={(v) => setCommon("swr", v)} min={2.5} max={6} step={0.1} unit="%"
-            info={<>Safe Withdrawal Rate. 자산의 X%를 매년 인출. <b>4% = 1년 생활비가 자산의 1/25(=자산 25배가 필요)</b>이라는 뜻. 1990년대 미국 30년 은퇴 가정 기준.</>} />
-          <Slide label="자산 매각비용" value={common.salecost} onChange={(v) => setCommon("salecost", v)} min={0} max={3} step={0.1} unit="%"
-            info={<>자산을 헐어 쓰는 해(소득&lt;소비)에만 인출액에 적용되는 거래비용·슬리피지 근사.</>} />
-          <Slide label="연 운용보수 (펀드·ETF)" value={common.fee ?? 0.5} onChange={(v) => setCommon("fee", v)} min={0} max={2} step={0.05} unit="%"
-            info={<>매년 블렌디드 수익률에서 차감. 미국 ETF ≈ 0.03~0.2%, 국내 액티브 펀드 ≈ 1%.</>} />
-          <Slide label="몬테카를로 시뮬 횟수" value={common.mcRuns ?? 1000} onChange={(v) => setCommon("mcRuns", v)} min={200} max={3000} step={100} unit="회" />
-        </div>
-        <div className="border-t border-slate-100 mt-4 pt-3">
-          <Toggle on={common.swrAdjust ?? true} onChange={(v) => setCommon("swrAdjust", v)} label="기간보정 SWR (은퇴 길수록 인출률 ↓)" />
-        </div>
-        <p className="text-[11px] text-slate-400 mt-3 leading-relaxed">생활비 증가율 = 생활비·FIRE 목표선 상승 / 물가상승률 = 연금·자녀비·목돈 등 일반 물가 / 매각비용은 자산을 헐어 쓰는 해에만 적용돼요. <b>변동성</b>은 위험자산 수익률이 해마다 얼마나 출렁이는지(과거 S&P500 ≈ 15~18%), 몬테카를로 결과 범위에만 쓰여요. <b>운용보수</b>는 매년 블렌디드 수익률에서 차감. <b>기간보정 SWR</b>이 켜져 있으면 은퇴 후 1년당 0.025%p씩 SWR이 자동으로 낮아져 FIRE 목표선이 보수화돼요(30년 4% → 50년 약 3.5%).</p>
-      </Card>
-      <TaxCard common={common} setCommon={setCommon} />
-      <AllocCard common={common} setCommon={setCommon} age={people[0].age} retireAge={people[0].retireAge} />
-      <Advanced adv={adv} setAdv={setAdv} people={people} common={common} setCommon={setCommon} />
     </div>
   );
 }
@@ -1116,7 +1175,7 @@ export default function App() {
   const [common, setCommonState] = useState(COMMON0);
   const [people, setPeople] = useState([ME0]);
   const [adv, setAdv] = useState(ADV0);
-  const [tab, setTab] = useState("in");
+  const [tab, setTab] = useState("out");
   const [view, setView] = useState("easy"); // easy | expert
   const [wizardActive, setWizardActive] = useState(false);
   const [variantB, setVariantB] = useState({}); // A/B 비교용 override
@@ -1154,7 +1213,7 @@ export default function App() {
   const pick = (m) => {
     setMode(m);
     setPeople(m === "couple" ? [{ ...ME0 }, { ...SPOUSE0 }] : [{ ...SOLO0 }]);
-    setCommonState(COMMON0); setAdv(ADV0); setView("easy"); setTab("in");
+    setCommonState(COMMON0); setAdv(ADV0); setView("easy"); setTab("out");
   };
   const resetAll = () => {
     if (!window.confirm("입력값을 모두 기본값으로 되돌릴까요?")) return;
@@ -1175,14 +1234,13 @@ export default function App() {
   const warnings = useMemo(() => (mode ? validateInputs(common, people, adv) : []), [mode, common, people, adv]);
   const nudge = useMemo(() => (mode && eng.earliest != null ? nudgeMonthlySavings(common, people, adv, eng.earliest) : null), [mode, common, people, adv, eng.earliest]);
   if (!mode) return <ModeSelect onPick={pick} />;
-  if (wizardActive) return <Wizard people={people} setPerson={setPerson} setExp={setExp}
+  if (wizardActive) return <Wizard people={people} setPerson={setPerson} setExp={setExp} mode={mode}
     onComplete={() => { setWizardActive(false); setTab("out"); }}
     onSkip={() => { setWizardActive(false); setTab("out"); }} />;
 
   const tabs = [
-    { k: "in", label: "입력", Icon: Sliders },
     { k: "out", label: "결과", Icon: BarChart3 },
-    { k: "tbl", label: "연도별", Icon: Table2 },
+    { k: "tbl", label: "연도별 표", Icon: Table2 },
   ];
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900" style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}>
@@ -1200,19 +1258,13 @@ export default function App() {
           <button onClick={() => setView("expert")} className={`flex-1 py-1.5 rounded-lg font-semibold ${view === "expert" ? "bg-emerald-600 text-white" : "text-slate-500"}`}>전문가</button>
         </div>
 
-        {tab === "in" && (
-          <div className="space-y-4">
-            <Warnings list={warnings} />
-            {view === "easy"
-              ? <EasyInputs {...{ people, setPerson, setExp }} />
-              : <Inputs {...{ common, setCommon, people, setPerson, setExp, adv, setAdv }} />}
-            <Share snapshot={{ mode, common, people, adv, view }} onLoad={loadSnapshot} />
-          </div>
-        )}
         {tab === "out" && (
           <div className="space-y-4">
+            <Warnings list={warnings} />
             <NarrativeResults eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people}
-              common={common} adv={adv} nudge={nudge} view={view} />
+              common={common} adv={adv}
+              setCommon={setCommon} setPerson={setPerson} setExp={setExp} setAdv={setAdv}
+              nudge={nudge} view={view} />
             {compareActive ? (
               <ComparePanel common={common} eng={eng} mc={mc} engB={engB} mcB={mcB}
                 variantB={variantB} setVariantB={setVariantB}
@@ -1222,6 +1274,7 @@ export default function App() {
                 A/B 시나리오 비교 열기
               </button>
             )}
+            <Share snapshot={{ mode, common, people, adv, view }} onLoad={loadSnapshot} />
             <div className="no-print">
               <ShareCard mc={mc} eng={eng} people={people} mode={mode} />
             </div>
