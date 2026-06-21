@@ -5,7 +5,7 @@ import {
 } from "recharts";
 import {
   Users, User, ChevronLeft, Sliders, BarChart3, Table2, Sparkles, TrendingUp,
-  Settings2, Share2, Plus, X, Copy, Check,
+  Settings2, Share2, Plus, X, Copy, Check, Info as InfoIcon,
 } from "lucide-react";
 import { won, yAxisFmt } from "./format.js";
 import {
@@ -14,10 +14,30 @@ import {
 } from "./engine.js";
 
 /* ───────────── 공용 컴포넌트 ───────────── */
-function Num({ label, value, onChange, unit, step = 1 }) {
+function Info({ children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-flex align-middle">
+      <button type="button" onClick={() => setOpen((o) => !o)} onBlur={() => setTimeout(() => setOpen(false), 120)}
+        className="text-slate-300 hover:text-slate-500 ml-0.5" aria-label="설명">
+        <InfoIcon size={12} />
+      </button>
+      {open && (
+        <span className="absolute z-20 top-full left-0 mt-1 w-60 rounded-lg bg-slate-900 text-white text-[11px] leading-relaxed p-2 shadow-lg font-normal">
+          {children}
+        </span>
+      )}
+    </span>
+  );
+}
+function LabelWithInfo({ label, info }) {
+  return <span className="inline-flex items-center">{label}{info && <Info>{info}</Info>}</span>;
+}
+
+function Num({ label, value, onChange, unit, step = 1, info }) {
   return (
     <label className="block">
-      <span className="block text-[11px] font-medium text-slate-500 mb-1">{label}</span>
+      <span className="block text-[11px] font-medium text-slate-500 mb-1"><LabelWithInfo label={label} info={info} /></span>
       <div className="flex items-center rounded-lg bg-amber-50 ring-1 ring-amber-200 focus-within:ring-2 focus-within:ring-emerald-400 transition">
         <input type="number" step={step} value={value}
           onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
@@ -27,11 +47,11 @@ function Num({ label, value, onChange, unit, step = 1 }) {
     </label>
   );
 }
-function Slide({ label, value, onChange, min, max, step, unit }) {
+function Slide({ label, value, onChange, min, max, step, unit, info }) {
   return (
     <label className="block">
       <div className="flex justify-between items-baseline mb-1">
-        <span className="text-[11px] font-medium text-slate-500">{label}</span>
+        <span className="text-[11px] font-medium text-slate-500"><LabelWithInfo label={label} info={info} /></span>
         <span className="text-sm font-semibold text-emerald-700 tabular-nums">{value}{unit}</span>
       </div>
       <input type="range" min={min} max={max} step={step} value={value}
@@ -228,7 +248,7 @@ function MonteCarloCard({ mc, pending, eng }) {
   const { successPct, earliestByConfidence: e, bands, runs } = mc;
   const lo = e.p85, hi = e.p50; // 보수(높은 신뢰) ~ 중앙값
   const succColor = successPct >= 0.85 ? "#059669" : successPct >= 0.5 ? "#d97706" : "#dc2626";
-  const succLabel = successPct >= 0.85 ? "안정권" : successPct >= 0.5 ? "주의" : "위험";
+  const succLabel = successPct >= 0.85 ? "충분히 안정" : successPct >= 0.5 ? "주의 — 절반은 모자랄 수 있음" : "위험 — 더 모으거나 늦추세요";
   return (
     <Card title="몬테카를로 (수익률 변동 반영)" accent="#7c3aed" icon={Sparkles}>
       <div className="flex items-baseline gap-2">
@@ -550,13 +570,19 @@ function Inputs({ common, setCommon, people, setPerson, setExp, adv, setAdv }) {
       </Card>
       <Card title="투자 · 경제 가정" accent="#0f172a">
         <div className="space-y-4">
-          <Slide label="위험자산 수익률 (연평균)" value={common.ret} onChange={(v) => setCommon("ret", v)} min={0} max={15} step={0.5} unit="%" />
-          <Slide label="위험자산 변동성 (표준편차)" value={common.vol ?? 18} onChange={(v) => setCommon("vol", v)} min={0} max={35} step={1} unit="%" />
-          <Slide label="생활비 증가율 (연)" value={common.expg} onChange={(v) => setCommon("expg", v)} min={0} max={8} step={0.1} unit="%" />
+          <Slide label="위험자산 수익률 (연평균)" value={common.ret} onChange={(v) => setCommon("ret", v)} min={0} max={15} step={0.5} unit="%"
+            info={<>장기 평균 기대수익. S&P500 명목 평균 ≈ 10%, 국내 주식 ≈ 7~8%. 비관적이면 5~6%, 낙관 8~9%.</>} />
+          <Slide label="위험자산 변동성 (표준편차)" value={common.vol ?? 18} onChange={(v) => setCommon("vol", v)} min={0} max={35} step={1} unit="%"
+            info={<>연 수익률이 평균값에서 얼마나 출렁이는지(σ). S&P500 ≈ 15~18%, 한국 주식 ≈ 20%. 0이면 매년 평균값 그대로 = 결정론.</>} />
+          <Slide label="생활비 증가율 (연)" value={common.expg} onChange={(v) => setCommon("expg", v)} min={0} max={8} step={0.1} unit="%"
+            info={<>장기 생활비·FIRE 목표선 상승률. 보통 임금·서비스물가가 일반 물가보다 약간 빠름.</>} />
           <Slide label="물가상승률 (연)" value={common.infl} onChange={(v) => setCommon("infl", v)} min={0} max={6} step={0.1} unit="%" />
-          <Slide label="인출률 SWR (연)" value={common.swr} onChange={(v) => setCommon("swr", v)} min={2.5} max={6} step={0.1} unit="%" />
-          <Slide label="자산 매각비용" value={common.salecost} onChange={(v) => setCommon("salecost", v)} min={0} max={3} step={0.1} unit="%" />
-          <Slide label="연 운용보수 (펀드·ETF)" value={common.fee ?? 0.5} onChange={(v) => setCommon("fee", v)} min={0} max={2} step={0.05} unit="%" />
+          <Slide label="인출률 SWR (연)" value={common.swr} onChange={(v) => setCommon("swr", v)} min={2.5} max={6} step={0.1} unit="%"
+            info={<>Safe Withdrawal Rate. 자산의 X%를 매년 인출. <b>4% = 1년 생활비가 자산의 1/25(=자산 25배가 필요)</b>이라는 뜻. 1990년대 미국 30년 은퇴 가정 기준.</>} />
+          <Slide label="자산 매각비용" value={common.salecost} onChange={(v) => setCommon("salecost", v)} min={0} max={3} step={0.1} unit="%"
+            info={<>자산을 헐어 쓰는 해(소득&lt;소비)에만 인출액에 적용되는 거래비용·슬리피지 근사.</>} />
+          <Slide label="연 운용보수 (펀드·ETF)" value={common.fee ?? 0.5} onChange={(v) => setCommon("fee", v)} min={0} max={2} step={0.05} unit="%"
+            info={<>매년 블렌디드 수익률에서 차감. 미국 ETF ≈ 0.03~0.2%, 국내 액티브 펀드 ≈ 1%.</>} />
           <Slide label="몬테카를로 시뮬 횟수" value={common.mcRuns ?? 1000} onChange={(v) => setCommon("mcRuns", v)} min={200} max={3000} step={100} unit="회" />
         </div>
         <div className="border-t border-slate-100 mt-4 pt-3">
@@ -637,12 +663,23 @@ export default function App() {
   const [adv, setAdv] = useState(ADV0);
   const [tab, setTab] = useState("in");
 
+  // 1순위: URL hash (#s=...). 2순위: localStorage. 둘 다 없으면 모드 선택부터.
   useEffect(() => {
     try {
       const m = (window.location.hash || "").match(/s=([^&]+)/);
-      if (m) loadSnapshot(dec(m[1]));
+      if (m) { loadSnapshot(dec(m[1])); return; }
+      const raw = window.localStorage.getItem("fs.v1");
+      if (raw) loadSnapshot(JSON.parse(raw));
     } catch { /* ignore */ }
   }, []);
+
+  // 입력 변화마다 localStorage 자동 저장 (mode가 선택된 뒤부터)
+  useEffect(() => {
+    if (!mode) return;
+    try {
+      window.localStorage.setItem("fs.v1", JSON.stringify({ mode, common, people, adv }));
+    } catch { /* quota/ssr */ }
+  }, [mode, common, people, adv]);
 
   const loadSnapshot = (st) => {
     if (!st || !st.mode) return;
@@ -656,6 +693,11 @@ export default function App() {
     setMode(m);
     setPeople(m === "couple" ? [{ ...ME0 }, { ...SPOUSE0 }] : [{ ...SOLO0 }]);
     setCommonState(COMMON0); setAdv(ADV0); setTab("in");
+  };
+  const resetAll = () => {
+    if (!window.confirm("입력값을 모두 기본값으로 되돌릴까요?")) return;
+    try { window.localStorage.removeItem("fs.v1"); } catch { /* ignore */ }
+    setMode(null);
   };
   const setCommon = (k, v) => setCommonState((c) => ({ ...c, [k]: v }));
   const setPerson = (i, k, v) => setPeople((ps) => ps.map((p, j) => (j === i ? { ...p, [k]: v } : p)));
@@ -680,7 +722,7 @@ export default function App() {
             {mode === "couple" ? <Users size={16} className="text-emerald-600" /> : <User size={16} className="text-indigo-600" />}
             {mode === "couple" ? "부부 모드" : "싱글 모드"}
           </div>
-          <div className="w-12" />
+          <button onClick={resetAll} className="text-[11px] text-slate-400 hover:text-red-500" title="입력값 모두 기본값으로 되돌리기">초기화</button>
         </header>
 
         <div className="rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-600 text-white p-4 mb-4 shadow-sm flex items-center justify-between">
