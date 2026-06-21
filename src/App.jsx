@@ -176,6 +176,47 @@ function Ladder({ data }) {
   );
 }
 
+/* ───────────── 쉬움 모드 결과 ───────────── */
+function EasyResults({ eng, mc, mcPending, mode, people }) {
+  const [open, setOpen] = useState(false);
+  const scopeData = eng.scope(mode === "single" ? 0 : "hh");
+  return (
+    <div className="space-y-4">
+      <MonteCarloCard mc={mc} pending={mcPending} eng={eng} />
+      <button onClick={() => setOpen((o) => !o)}
+        className="w-full rounded-xl bg-white ring-1 ring-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 flex items-center justify-between">
+        <span>{open ? "근거 접기" : "왜요? — 자세히 보기"}</span>
+        <span className="text-slate-400">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <>
+          <Card>
+            <div className="flex items-baseline justify-between mb-1">
+              <div className="text-xs font-medium text-slate-500">평균 수익률 기준 은퇴 가능 나이</div>
+            </div>
+            {eng.earliest != null ? (
+              <div className="mt-1">
+                <span className="text-4xl font-extrabold text-emerald-600 tabular-nums">{eng.earliest}</span>
+                <span className="text-xl font-bold text-emerald-600">세</span>
+                <p className="text-[12px] text-slate-500 mt-2 leading-relaxed">변동성을 무시한 단일 시나리오라 위 몬테카를로보다 낙관적이에요.</p>
+              </div>
+            ) : (
+              <p className="text-[12px] text-slate-600 mt-1">평균 시나리오도 100세까지 어려워요.</p>
+            )}
+          </Card>
+          <Card title="자산 추이 (현재 계획·평균치)" accent="#059669">
+            <RetireChart eng={eng} />
+          </Card>
+          <Card title="FIRE 단계별 도달" accent="#4f46e5">
+            <Ladder data={scopeData} />
+            <p className="text-[11px] text-slate-400 mt-3">막대 = 현재 자산이 각 단계 필요자산의 몇 %인지. 적용 SWR <b className="text-slate-600">{scopeData.swrEff?.toFixed(2)}%</b>.</p>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ───────────── 결과 ───────────── */
 function Results({ eng, mc, mcPending, mode, people }) {
   const [goal, setGoal] = useState("retire");
@@ -527,6 +568,28 @@ function AllocCard({ common, setCommon, age, retireAge }) {
   );
 }
 
+/* ───────────── 쉬움 모드 입력 ───────────── */
+function EasyInputs({ people, setPerson, setExp }) {
+  const personCard = (p, idx, accent) => (
+    <Card key={idx} title={p.name} accent={accent}>
+      <div className="grid grid-cols-2 gap-3">
+        <Num label="현재 나이" value={p.age} onChange={(v) => setPerson(idx, "age", v)} unit="세" />
+        <Num label="현재 자산" value={p.asset} onChange={(v) => setPerson(idx, "asset", v)} unit="만원" />
+        <Num label="월 생활비" value={p.exp.now} onChange={(v) => { setExp(idx, "now", v); setExp(idx, "std", v); setExp(idx, "lean", Math.round(v * 0.65)); setExp(idx, "fat", Math.round(v * 1.8)); }} unit="만원/월" />
+        <Num label="연 소득 (세후)" value={p.income} onChange={(v) => setPerson(idx, "income", v)} unit="만원/년" />
+      </div>
+    </Card>
+  );
+  return (
+    <div className="space-y-4">
+      {people.map((p, i) => personCard(p, i, i === 0 ? "#4f46e5" : "#059669"))}
+      <div className="rounded-2xl bg-emerald-50 ring-1 ring-emerald-200 p-3 text-[12px] text-slate-700 leading-relaxed">
+        쉬움 모드는 핵심 4개 값만 받고 나머지(정년 55세 · 수명 100세 · 수익률 7%·변동성 18% · 자산배분 110−나이 · 세금·건보료·운용보수)는 한국 평균치로 자동 채워요. 좀 더 정교하게 보고 싶으면 위 <b>전문가</b>를 눌러보세요.
+      </div>
+    </div>
+  );
+}
+
 /* ───────────── 입력 ───────────── */
 function Inputs({ common, setCommon, people, setPerson, setExp, adv, setAdv }) {
   const personCard = (p, idx, accent) => (
@@ -662,6 +725,7 @@ export default function App() {
   const [people, setPeople] = useState([ME0]);
   const [adv, setAdv] = useState(ADV0);
   const [tab, setTab] = useState("in");
+  const [view, setView] = useState("easy"); // easy | expert
 
   // 1순위: URL hash (#s=...). 2순위: localStorage. 둘 다 없으면 모드 선택부터.
   useEffect(() => {
@@ -677,9 +741,9 @@ export default function App() {
   useEffect(() => {
     if (!mode) return;
     try {
-      window.localStorage.setItem("fs.v1", JSON.stringify({ mode, common, people, adv }));
+      window.localStorage.setItem("fs.v1", JSON.stringify({ mode, common, people, adv, view }));
     } catch { /* quota/ssr */ }
-  }, [mode, common, people, adv]);
+  }, [mode, common, people, adv, view]);
 
   const loadSnapshot = (st) => {
     if (!st || !st.mode) return;
@@ -687,12 +751,14 @@ export default function App() {
     setCommonState({ ...COMMON0, ...st.common });
     setPeople(st.people);
     setAdv({ ...ADV0, ...st.adv });
+    // 저장된 view 없으면 기존 사용자로 보고 expert로 폴백 (신규 첫 진입은 easy)
+    setView(st.view || "expert");
     setTab("out");
   };
   const pick = (m) => {
     setMode(m);
     setPeople(m === "couple" ? [{ ...ME0 }, { ...SPOUSE0 }] : [{ ...SOLO0 }]);
-    setCommonState(COMMON0); setAdv(ADV0); setTab("in");
+    setCommonState(COMMON0); setAdv(ADV0); setView("easy"); setTab("in");
   };
   const resetAll = () => {
     if (!window.confirm("입력값을 모두 기본값으로 되돌릴까요?")) return;
@@ -716,7 +782,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900" style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <div className="max-w-xl mx-auto px-4 pb-28 pt-4">
-        <header className="flex items-center justify-between mb-4">
+        <header className="flex items-center justify-between mb-3">
           <button onClick={() => setMode(null)} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800"><ChevronLeft size={18} /> 모드</button>
           <div className="flex items-center gap-1.5 text-sm font-bold">
             {mode === "couple" ? <Users size={16} className="text-emerald-600" /> : <User size={16} className="text-indigo-600" />}
@@ -724,6 +790,10 @@ export default function App() {
           </div>
           <button onClick={resetAll} className="text-[11px] text-slate-400 hover:text-red-500" title="입력값 모두 기본값으로 되돌리기">초기화</button>
         </header>
+        <div className="flex justify-center gap-1 p-1 mb-3 rounded-xl bg-white ring-1 ring-slate-200 text-[12px]">
+          <button onClick={() => setView("easy")} className={`flex-1 py-1.5 rounded-lg font-semibold ${view === "easy" ? "bg-emerald-600 text-white" : "text-slate-500"}`}>쉬움</button>
+          <button onClick={() => setView("expert")} className={`flex-1 py-1.5 rounded-lg font-semibold ${view === "expert" ? "bg-emerald-600 text-white" : "text-slate-500"}`}>전문가</button>
+        </div>
 
         <div className="rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-600 text-white p-4 mb-4 shadow-sm flex items-center justify-between">
           <div>
@@ -743,11 +813,17 @@ export default function App() {
         {tab === "in" && (
           <div className="space-y-4">
             <Warnings list={warnings} />
-            <Inputs {...{ common, setCommon, people, setPerson, setExp, adv, setAdv }} />
-            <Share snapshot={{ mode, common, people, adv }} onLoad={loadSnapshot} />
+            {view === "easy"
+              ? <EasyInputs {...{ people, setPerson, setExp }} />
+              : <Inputs {...{ common, setCommon, people, setPerson, setExp, adv, setAdv }} />}
+            <Share snapshot={{ mode, common, people, adv, view }} onLoad={loadSnapshot} />
           </div>
         )}
-        {tab === "out" && <Results eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} />}
+        {tab === "out" && (
+          view === "easy"
+            ? <EasyResults eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} />
+            : <Results eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} />
+        )}
         {tab === "tbl" && <YearTable eng={eng} hasPension={adv.pension.on} />}
       </div>
 
