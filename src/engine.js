@@ -8,7 +8,27 @@ export const COMMON0 = {
   vol: 18, mcRuns: 1000,
   tax: { on: true, equityGain: 5, pension: 5, healthInsRetired: 60 },
   fee: 0.5, swrAdjust: true,
+  firePensionMode: false, // true면 FIRE 목표에서 예상 연금만큼 차감 → 필요자산 축소
 };
+
+// 국민연금 예상 연수령액 (만원). 단순 근사 — 30년 가입 시 평균소득의 40% 대체율을
+// 기준으로 가입년수당 ±2%p 보정, 0.1~0.6에서 클램프. 2024년 상한 ≈ 월 260만(연 3120만)도 적용.
+export function estimateNPSAnnual({ avgMonthlyIncomeMan, years }) {
+  if (!avgMonthlyIncomeMan || !years) return 0;
+  const replacement = Math.min(0.6, Math.max(0.1, 0.40 + (years - 30) * 0.02));
+  const monthly = Math.min(260, avgMonthlyIncomeMan * replacement);
+  return Math.round(monthly * 12);
+}
+
+// 퇴직연금 예상 연수령액 (만원). 매년 월급 1개월치 적립 → 연 수익률 복리 누적 →
+// 60세부터 20년 분할 수령 가정. 단순화.
+export function estimateRetirementPensionAnnual({ avgMonthlyIncomeMan, years, returnPct = 4, payoutYears = 20 }) {
+  if (!avgMonthlyIncomeMan || !years) return 0;
+  const r = returnPct / 100;
+  let acc = 0;
+  for (let i = 0; i < years; i++) acc = acc * (1 + r) + avgMonthlyIncomeMan;
+  return Math.round(acc / payoutYears);
+}
 
 // 비현실 입력·논리 오류 경고. 결과를 막지 않고 표시만 한다.
 export function validateInputs(common, people, adv) {
@@ -49,6 +69,21 @@ export const ADV0 = {
   doomsday: { on: false, age: 60, drop: 40 },
   children: { on: false, list: [{ curAge: 3, indepAge: 25, cost: 1500 }] },
   lumps: { on: false, list: [{ age: 45, amount: 4000, label: "차량 교체" }] },
+  retireExp: {
+    on: false,
+    slowAge: 70,   // slow-go 시작
+    slowMult: 85,  // % — 활동기 대비 안정기 소비 (보통 80~90%)
+    careAge: 85,   // no-go 시작 (간병기)
+    careMult: 100, // % — 안정기 대비 간병기 소비 (의료비로 다시 ↑)
+    careSpike: 2400, // 만원/년, 현재가치 — 가구 단위 간병비 추가
+  },
+  realEstate: {
+    on: false,
+    value: 50000,       // 현재 가치 (만원). 실거주 또는 전세보증금.
+    growth: 1,          // 연 가치 상승률 (%). 한국 장기 ≈ 1~3%.
+    downsize: { on: false, age: 70, sellRatio: 40 }, // 그 나이에 부동산 sellRatio%를 현금화→투자자산
+    reverseMort: { on: false, startAge: 65, annual: 1200 }, // 주택연금: 그 나이부터 매년 annual(만원, 현재가치) 수령
+  },
 };
 
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
@@ -85,6 +120,17 @@ export function useEngine(common, people, adv) {
     const taxEq = tax.on ? tax.equityGain / 100 : 0;
     const taxPen = tax.on ? tax.pension / 100 : 0;
     const taxHI = tax.on ? (tax.healthInsRetired || 0) : 0;
+    const rx = adv.retireExp || { on: false };
+    const rxOn = !!rx.on;
+    const rxSlowMult = rxOn ? rx.slowMult / 100 : 1;
+    const rxCareMult = rxOn ? rx.careMult / 100 : 1;
+    const re = adv.realEstate || { on: false };
+    const reGrowth = re.on ? (re.growth || 0) / 100 : 0;
+    const reDsAge = re.on && re.downsize?.on ? re.downsize.age : null;
+    const reDsRatio = re.on && re.downsize?.on ? (re.downsize.sellRatio || 0) / 100 : 0;
+    const revOn = re.on && re.reverseMort?.on;
+    const revStartAge = revOn ? re.reverseMort.startAge : null;
+    const revAnnual = revOn ? (re.reverseMort.annual || 0) : 0;
     const retA0 = people[0].retireAge;
     const isRec = (t) => adv.recession.on && t > 0 && adv.recession.every > 0 && t % adv.recession.every === 0;
     const eqW = (t) => equityWeight(common.alloc, startAge + t, startAge, retA0);
@@ -92,24 +138,31 @@ export function useEngine(common, people, adv) {
 
     function cashflow(tRet) {
       let asset = people.reduce((s, p) => s + (+p.asset || 0), 0);
+      let reValue = re.on ? (+re.value || 0) : 0;
       let depletedAt = null;
       const rows = [];
       for (let t = 0; t <= years; t++) {
         const age = startAge + t;
-        let income = 0, pension = 0, expense = 0, anyRetired = false;
-        people.forEach((p, i) => {
+        let income = 0, pension = 0, expense = 0, anyRetired = false, anyInCare = false;
+        people.forEach((p) => {
           const pa = p.age + t;
           const working = tRet != null ? t < tRet : pa < p.retireAge;
           if (working) income += p.income * Math.pow(1 + p.growth / 100, t);
           if (!working) anyRetired = true;
           if (adv.pension.on && pa >= p.pensionAge) pension += p.pension * Math.pow(1 + infl, t);
-          expense += (p.exp.now * 12 + p.irr) * Math.pow(1 + expg, t);
+          let mult = 1;
+          if (rxOn && !working) {
+            if (pa >= rx.careAge) { mult = rxCareMult; anyInCare = true; }
+            else if (pa >= rx.slowAge) mult = rxSlowMult;
+          }
+          expense += (p.exp.now * 12 + p.irr) * Math.pow(1 + expg, t) * mult;
         });
         if (adv.children.on) adv.children.list.forEach((c) => { if (c.curAge + t < c.indepAge) expense += c.cost * Math.pow(1 + infl, t); });
-        // 은퇴 후 건강보험료(가구 합산 근사) — 한 명이라도 은퇴 상태면 추가
         if (taxHI > 0 && anyRetired) expense += taxHI * Math.pow(1 + infl, t);
+        if (rxOn && anyInCare && rx.careSpike) expense += rx.careSpike * Math.pow(1 + infl, t);
+        if (revOn && age >= revStartAge) pension += revAnnual * Math.pow(1 + infl, t);
         const pensionNet = pension * (1 - taxPen);
-        rows.push({ age, year: THIS_YEAR + t, income: Math.round(income), pension: Math.round(pensionNet), expense: Math.round(expense), asset: asset < 0 ? null : Math.round(asset) });
+        rows.push({ age, year: THIS_YEAR + t, income: Math.round(income), pension: Math.round(pensionNet), expense: Math.round(expense), asset: asset < 0 ? null : Math.round(asset), realEstate: re.on ? Math.round(reValue) : 0 });
         if (asset < 0 && depletedAt == null) depletedAt = age;
         const invest = asset > 0 ? asset * blended(t) : 0;
         const net = income + pensionNet - expense;
@@ -117,6 +170,13 @@ export function useEngine(common, people, adv) {
         asset = asset + net + invest - saleCost;
         if (adv.lumps.on) adv.lumps.list.forEach((l) => { if (age === l.age) asset -= l.amount * Math.pow(1 + infl, t); });
         if (adv.doomsday.on && age === adv.doomsday.age) asset *= 1 - eqW(t) * adv.doomsday.drop / 100;
+        // 다운사이징: 부동산 일부 매각 → 투자자산으로 (현재가치 기준 입력이라 무가공)
+        if (reDsAge != null && age === reDsAge && reValue > 0) {
+          const cashed = reValue * reDsRatio;
+          asset += cashed;
+          reValue -= cashed;
+        }
+        reValue *= 1 + reGrowth;
       }
       return { rows, depletedAt };
     }
@@ -129,9 +189,14 @@ export function useEngine(common, people, adv) {
       const hh = which === "hh";
       const ppl = hh ? people : [people[which]];
       const a0 = ppl.reduce((s, p) => s + (+p.asset || 0), 0);
-      const leanA = ppl.reduce((s, p) => s + p.exp.lean * 12 + p.irr, 0);
-      const stdA = ppl.reduce((s, p) => s + p.exp.std * 12 + p.irr, 0);
-      const fatA = ppl.reduce((s, p) => s + p.exp.fat * 12 + p.irr, 0);
+      // FIRE 목표에서 연금 차감 (현재가치 기준 단순 차감)
+      const pensionAdj = common.firePensionMode
+        ? (adv.pension.on ? ppl.reduce((s, p) => s + (p.pension || 0) * (1 - taxPen), 0) : 0)
+          + (hh && revOn ? revAnnual : 0) // 주택연금은 가구 단위 1개
+        : 0;
+      const leanA = Math.max(0, ppl.reduce((s, p) => s + p.exp.lean * 12 + p.irr, 0) - pensionAdj);
+      const stdA = Math.max(0, ppl.reduce((s, p) => s + p.exp.std * 12 + p.irr, 0) - pensionAdj);
+      const fatA = Math.max(0, ppl.reduce((s, p) => s + p.exp.fat * 12 + p.irr, 0) - pensionAdj);
       const retA = people[0].retireAge;
       const nToRet = Math.max(retA - startAge, 0);
       const retirementYears = Math.max(0, endAge - retA);
@@ -211,9 +276,21 @@ function simOnePath({ retPath, common, people, adv, tRet }) {
   const taxEq = tax.on ? tax.equityGain / 100 : 0;
   const taxPen = tax.on ? tax.pension / 100 : 0;
   const taxHI = tax.on ? (tax.healthInsRetired || 0) : 0;
+  const rx = adv.retireExp || { on: false };
+  const rxOn = !!rx.on;
+  const rxSlowMult = rxOn ? rx.slowMult / 100 : 1;
+  const rxCareMult = rxOn ? rx.careMult / 100 : 1;
+  const re = adv.realEstate || { on: false };
+  const reGrowth = re.on ? (re.growth || 0) / 100 : 0;
+  const reDsAge = re.on && re.downsize?.on ? re.downsize.age : null;
+  const reDsRatio = re.on && re.downsize?.on ? (re.downsize.sellRatio || 0) / 100 : 0;
+  const revOn = re.on && re.reverseMort?.on;
+  const revStartAge = revOn ? re.reverseMort.startAge : null;
+  const revAnnual = revOn ? (re.reverseMort.annual || 0) : 0;
   const retA0 = people[0].retireAge;
 
   let asset = people.reduce((s, p) => s + (+p.asset || 0), 0);
+  let reValue = re.on ? (+re.value || 0) : 0;
   const path = new Array(years + 1);
   let depleted = false;
 
@@ -222,7 +299,7 @@ function simOnePath({ retPath, common, people, adv, tRet }) {
     path[t] = asset < 0 ? 0 : asset;
     if (asset < 0) depleted = true;
 
-    let income = 0, pension = 0, expense = 0, anyRetired = false;
+    let income = 0, pension = 0, expense = 0, anyRetired = false, anyInCare = false;
     for (let i = 0; i < people.length; i++) {
       const p = people[i];
       const pa = p.age + t;
@@ -230,10 +307,17 @@ function simOnePath({ retPath, common, people, adv, tRet }) {
       if (working) income += p.income * Math.pow(1 + p.growth / 100, t);
       if (!working) anyRetired = true;
       if (adv.pension.on && pa >= p.pensionAge) pension += p.pension * Math.pow(1 + infl, t);
-      expense += (p.exp.now * 12 + p.irr) * Math.pow(1 + expg, t);
+      let mult = 1;
+      if (rxOn && !working) {
+        if (pa >= rx.careAge) { mult = rxCareMult; anyInCare = true; }
+        else if (pa >= rx.slowAge) mult = rxSlowMult;
+      }
+      expense += (p.exp.now * 12 + p.irr) * Math.pow(1 + expg, t) * mult;
     }
     if (adv.children.on) for (const c of adv.children.list) if (c.curAge + t < c.indepAge) expense += c.cost * Math.pow(1 + infl, t);
     if (taxHI > 0 && anyRetired) expense += taxHI * Math.pow(1 + infl, t);
+    if (rxOn && anyInCare && rx.careSpike) expense += rx.careSpike * Math.pow(1 + infl, t);
+    if (revOn && age >= revStartAge) pension += revAnnual * Math.pow(1 + infl, t);
 
     const w = equityWeight(common.alloc, age, startAge, retA0);
     const eqR = retPath[t];
@@ -245,6 +329,12 @@ function simOnePath({ retPath, common, people, adv, tRet }) {
     asset = asset + net + invest - saleCost;
     if (adv.lumps.on) for (const l of adv.lumps.list) if (age === l.age) asset -= l.amount * Math.pow(1 + infl, t);
     if (adv.doomsday.on && age === adv.doomsday.age) asset *= 1 - w * adv.doomsday.drop / 100;
+    if (reDsAge != null && age === reDsAge && reValue > 0) {
+      const cashed = reValue * reDsRatio;
+      asset += cashed;
+      reValue -= cashed;
+    }
+    reValue *= 1 + reGrowth;
   }
   return { path, survived: !depleted };
 }

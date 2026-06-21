@@ -11,6 +11,7 @@ import { won, yAxisFmt, parseMoneyMan } from "./format.js";
 import {
   COMMON0, ME0, SPOUSE0, SOLO0, ADV0,
   equityWeight, useEngine, useMonteCarlo, validateInputs, nudgeMonthlySavings,
+  estimateNPSAnnual, estimateRetirementPensionAnnual,
 } from "./engine.js";
 
 /* ───────────── 공용 컴포넌트 ───────────── */
@@ -515,7 +516,7 @@ function YearTable({ eng, hasPension }) {
 }
 
 /* ───────────── 고급 옵션 ───────────── */
-function Advanced({ adv, setAdv, people }) {
+function Advanced({ adv, setAdv, people, common, setCommon }) {
   const setP = (path, v) => setAdv((a) => ({ ...a, [path]: { ...a[path], ...v } }));
   const updItem = (path, i, key, v) => setAdv((a) => ({ ...a, [path]: { ...a[path], list: a[path].list.map((it, j) => (j === i ? { ...it, [key]: v } : it)) } }));
   const addItem = (path, item) => setAdv((a) => ({ ...a, [path]: { ...a[path], list: [...a[path].list, item] } }));
@@ -527,7 +528,13 @@ function Advanced({ adv, setAdv, people }) {
     <Card title="고급 옵션" accent="#0f172a" icon={Settings2}>
       <Block>
         <Toggle on={adv.pension.on} onChange={(v) => setP("pension", { on: v })} label="국민·퇴직 연금" />
-        {adv.pension.on && <Hint>켜면 입력 탭의 각 사람 카드에 '연금 개시·수령액' 칸이 생겨요. 연금은 일반 은퇴 계산에만 반영됩니다.</Hint>}
+        {adv.pension.on && (
+          <div className="mt-3 pl-3 border-l-2 border-slate-100">
+            <Toggle on={common.firePensionMode} onChange={(v) => setCommon("firePensionMode", v)} label="FIRE 목표에서 연금 차감" />
+            <Hint>FIRE 단계별 도달은 원래 자산만으로 생활비를 감당하는 시점이에요. 켜면 목표 = (연생활비 − 연금)/SWR 로 줄여서 보여요(현재가치 기준 단순 차감). 일반 은퇴 계산에는 영향 없어요.</Hint>
+          </div>
+        )}
+        {adv.pension.on && <Hint>입력 탭의 각 사람 카드에 '연금 개시·수령액' + 추정 도우미가 생겨요.</Hint>}
       </Block>
 
       <Block>
@@ -583,6 +590,65 @@ function Advanced({ adv, setAdv, people }) {
           </div>
         )}
         {adv.lumps.on && <Hint>차량 교체·대학 등록금·결혼·주택처럼 특정 나이에 한 번 빠지는 목돈(만원, 현재가치)이에요.</Hint>}
+      </Block>
+
+      <Block>
+        <Toggle on={adv.retireExp?.on || false} onChange={(v) => setP("retireExp", { on: v })} label="은퇴 후 소비곡선 (go-go → slow-go → no-go)" accent="#65a30d" />
+        {adv.retireExp?.on && (
+          <>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <Num label="안정기 시작 나이" value={adv.retireExp.slowAge} onChange={(v) => setP("retireExp", { slowAge: v })} unit="세"
+                info={<>활동기(go-go)에서 안정기(slow-go)로 넘어가는 나이. 보통 70 전후 — 여행·외식 줄고 집에 더 머무는 시기.</>} />
+              <Num label="안정기 소비 (현재 대비)" value={adv.retireExp.slowMult} onChange={(v) => setP("retireExp", { slowMult: v })} unit="%" />
+              <Num label="간병기 시작 나이" value={adv.retireExp.careAge} onChange={(v) => setP("retireExp", { careAge: v })} unit="세"
+                info={<>안정기(slow-go)에서 간병기(no-go)로 넘어가는 나이. 의료·돌봄 지출이 다시 ↑.</>} />
+              <Num label="간병기 소비 (현재 대비)" value={adv.retireExp.careMult} onChange={(v) => setP("retireExp", { careMult: v })} unit="%" />
+            </div>
+            <div className="mt-3">
+              <Num label="간병기 추가 비용 (가구·연)" value={adv.retireExp.careSpike} onChange={(v) => setP("retireExp", { careSpike: v })} unit="만원/년"
+                info={<>요양·간병·의료비 평균. 가구 중 한 명이라도 간병기에 들어가면 매년 추가. 현재가치 → 매년 물가 따라 증가.</>} />
+            </div>
+            <Hint>각 사람의 본인 나이를 기준으로 단계가 갈려요. 부부면 한 명만 간병기여도 간병비 spike는 가구에 적용.</Hint>
+          </>
+        )}
+      </Block>
+
+      <Block>
+        <Toggle on={adv.realEstate?.on || false} onChange={(v) => setP("realEstate", { on: v })} label="부동산 (실거주·전세보증금)" accent="#0891b2" />
+        {adv.realEstate?.on && (
+          <>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <Num label="현재 가치" value={adv.realEstate.value} onChange={(v) => setP("realEstate", { value: v })} unit="만원"
+                info={<>실거주 주택 시가 + 전세보증금. 투자자산과 분리해 비유동으로 별도 추적해요.</>} />
+              <Num label="연 가치 상승률" value={adv.realEstate.growth} onChange={(v) => setP("realEstate", { growth: v })} unit="%" />
+            </div>
+            <div className="mt-3 pl-3 border-l-2 border-cyan-100">
+              <Toggle on={adv.realEstate.downsize?.on || false}
+                onChange={(v) => setP("realEstate", { downsize: { ...adv.realEstate.downsize, on: v } })}
+                label="다운사이징 (특정 나이에 현금화)" accent="#0891b2" />
+              {adv.realEstate.downsize?.on && (
+                <div className="mt-2 grid grid-cols-2 gap-3">
+                  <Num label="다운사이징 나이" value={adv.realEstate.downsize.age} onChange={(v) => setP("realEstate", { downsize: { ...adv.realEstate.downsize, age: v } })} unit="세" />
+                  <Num label="매각 비율" value={adv.realEstate.downsize.sellRatio} onChange={(v) => setP("realEstate", { downsize: { ...adv.realEstate.downsize, sellRatio: v } })} unit="%"
+                    info={<>그 해에 부동산 가치의 이 비율만큼을 현금화해 투자자산에 더해요. 작은 평수로 이사한다는 가정.</>} />
+                </div>
+              )}
+            </div>
+            <div className="mt-3 pl-3 border-l-2 border-cyan-100">
+              <Toggle on={adv.realEstate.reverseMort?.on || false}
+                onChange={(v) => setP("realEstate", { reverseMort: { ...adv.realEstate.reverseMort, on: v } })}
+                label="주택연금 (역모기지)" accent="#0891b2" />
+              {adv.realEstate.reverseMort?.on && (
+                <div className="mt-2 grid grid-cols-2 gap-3">
+                  <Num label="개시 나이" value={adv.realEstate.reverseMort.startAge} onChange={(v) => setP("realEstate", { reverseMort: { ...adv.realEstate.reverseMort, startAge: v } })} unit="세" />
+                  <Num label="연 수령액" value={adv.realEstate.reverseMort.annual} onChange={(v) => setP("realEstate", { reverseMort: { ...adv.realEstate.reverseMort, annual: v } })} unit="만원/년"
+                    info={<>현재가치 기준 연 수령액. 매년 물가 따라 명목 증가로 모델링.</>} />
+                </div>
+              )}
+            </div>
+            <Hint>부동산은 자산곡선의 '투자자산'과 분리해 다뤄요. 다운사이징을 켜면 그 나이에 일부가 투자자산으로 들어오고, 주택연금은 그 나이부터 연 수입처럼 흘러요. 둘 다 켜면 동시 적용.</Hint>
+          </>
+        )}
       </Block>
 
       <Block>
@@ -676,6 +742,41 @@ function EasyInputs({ people, setPerson, setExp }) {
   );
 }
 
+/* ───────────── 연금 추정 도우미 ───────────── */
+function PensionHelper({ onApply }) {
+  const [open, setOpen] = useState(false);
+  const [income, setIncome] = useState(300);   // 평균 월소득 (만원)
+  const [npsYears, setNpsYears] = useState(30);
+  const [retYears, setRetYears] = useState(25);
+  const nps = estimateNPSAnnual({ avgMonthlyIncomeMan: income, years: npsYears });
+  const ret = estimateRetirementPensionAnnual({ avgMonthlyIncomeMan: income, years: retYears });
+  const total = nps + ret;
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-3">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="text-[12px] font-semibold text-emerald-700 hover:underline">
+        {open ? "▲ 연금 추정 도우미 접기" : "▼ 모르면 추정 도우미 열기"}
+      </button>
+      {open && (
+        <div className="mt-2 space-y-3">
+          <div className="grid grid-cols-3 gap-2">
+            <Num label="평균 월소득" value={income} onChange={setIncome} unit="만원" />
+            <Num label="국민연금 가입년수" value={npsYears} onChange={setNpsYears} unit="년" />
+            <Num label="퇴직연금 가입년수" value={retYears} onChange={setRetYears} unit="년" />
+          </div>
+          <div className="rounded-lg bg-emerald-50 ring-1 ring-emerald-200 p-2.5 text-[12px] text-slate-700 leading-relaxed">
+            추정: <b>국민연금 {won(nps)}/년</b> + <b>퇴직연금 {won(ret)}/년</b> = <b className="text-emerald-700">{won(total)}/년</b>
+            <p className="text-[10px] text-slate-500 mt-1">간이 근사 — 국민연금은 30년 가입 시 평균소득의 40% 대체율 기준 ±2%p/년, 월 상한 260만 적용. 퇴직연금은 매년 월급 1개월치 적립·연 4% 운용·60세부터 20년 분할 가정. 실제는 NPS 계산식·DC/DB·IRP에 따라 다름.</p>
+          </div>
+          <button type="button" onClick={() => { onApply(total, 65); setOpen(false); }}
+            className="w-full py-2 rounded-lg bg-emerald-600 text-white text-[12px] font-semibold">
+            이 값으로 채우기 (개시 65세)
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ───────────── 입력 ───────────── */
 function Inputs({ common, setCommon, people, setPerson, setExp, adv, setAdv }) {
   const personCard = (p, idx, accent) => (
@@ -690,6 +791,7 @@ function Inputs({ common, setCommon, people, setPerson, setExp, adv, setAdv }) {
         {adv.pension.on && <Num label="연금 개시" value={p.pensionAge} onChange={(v) => setPerson(idx, "pensionAge", v)} unit="세" />}
         {adv.pension.on && <Num label="연금 수령액" value={p.pension} onChange={(v) => setPerson(idx, "pension", v)} unit="만원/년" />}
       </div>
+      {adv.pension.on && <PensionHelper onApply={(annual, startAge) => { setPerson(idx, "pension", annual); setPerson(idx, "pensionAge", startAge); }} />}
     </Card>
   );
   return (
@@ -741,7 +843,7 @@ function Inputs({ common, setCommon, people, setPerson, setExp, adv, setAdv }) {
       </Card>
       <TaxCard common={common} setCommon={setCommon} />
       <AllocCard common={common} setCommon={setCommon} age={people[0].age} retireAge={people[0].retireAge} />
-      <Advanced adv={adv} setAdv={setAdv} people={people} />
+      <Advanced adv={adv} setAdv={setAdv} people={people} common={common} setCommon={setCommon} />
     </div>
   );
 }
