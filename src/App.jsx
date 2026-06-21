@@ -132,6 +132,49 @@ function Select({ label, value, onChange, options }) {
   );
 }
 
+/* ───────────── 온보딩 위저드 ───────────── */
+function Wizard({ people, setPerson, setExp, onComplete, onSkip }) {
+  const [step, setStep] = useState(0); // 0 = person 0, 1 = person 1 (couple만)
+  const total = people.length;
+  const p = people[step];
+  const monthlyAvg = total > 1 ? 280 : 180;
+  const next = () => {
+    if (step + 1 < total) setStep(step + 1);
+    else onComplete();
+  };
+  return (
+    <div className="min-h-screen flex flex-col bg-slate-50">
+      <div className="max-w-md w-full mx-auto px-5 py-8 flex-1 flex flex-col">
+        <button onClick={onSkip} className="self-end text-[12px] text-slate-400 hover:text-slate-600">건너뛰고 결과 보기 →</button>
+        <div className="mt-2 flex gap-1.5 justify-center">
+          {Array.from({ length: total }).map((_, i) => (
+            <span key={i} className="h-1 rounded-full transition-all" style={{ width: i === step ? 28 : 12, background: i <= step ? "#059669" : "#cbd5e1" }} />
+          ))}
+        </div>
+        <div className="text-center mt-6">
+          <div className="text-[12px] font-semibold text-emerald-700">{step + 1} / {total}</div>
+          <h2 className="text-2xl font-extrabold text-slate-900 mt-1">{p.name}의 핵심 4가지</h2>
+          <p className="text-[13px] text-slate-500 mt-2 leading-relaxed">정확하지 않아도 괜찮아요. 잘 모르겠으면 '평균값'을 누르거나 빈칸으로 두고 다음으로 가도 돼요.</p>
+        </div>
+        <div className="mt-7 space-y-4">
+          <Num label="현재 나이" value={p.age} onChange={(v) => setPerson(step, "age", v)} unit="세" />
+          <MoneyInput label="현재 자산 (예금·주식·부동산 합산)" value={p.asset} onChange={(v) => setPerson(step, "asset", v)} />
+          <MoneyInput label="월 생활비" value={p.exp.now} unit="만원/월" hintAvg={monthlyAvg}
+            onChange={(v) => { setExp(step, "now", v); setExp(step, "std", v); setExp(step, "lean", Math.round(v * 0.65)); setExp(step, "fat", Math.round(v * 1.8)); }} />
+          <MoneyInput label="연 소득 (세후)" value={p.income} onChange={(v) => setPerson(step, "income", v)} unit="만원/년" />
+        </div>
+        <div className="mt-auto pt-8 flex gap-2">
+          {step > 0 && <button onClick={() => setStep(step - 1)} className="px-4 py-3 rounded-xl bg-white ring-1 ring-slate-200 text-sm font-semibold text-slate-700">이전</button>}
+          <button onClick={next} className="flex-1 py-3 rounded-xl bg-emerald-600 text-white text-sm font-bold shadow-sm hover:bg-emerald-700">
+            {step + 1 < total ? "다음 →" : "결과 보기"}
+          </button>
+        </div>
+        <p className="text-center text-[11px] text-slate-400 mt-4">언제든 위쪽 <b>전문가</b> 토글로 정년·수익률·자산배분 등 세부 입력을 켤 수 있어요.</p>
+      </div>
+    </div>
+  );
+}
+
 /* ───────────── 모드 선택 ───────────── */
 function ModeSelect({ onPick }) {
   const opt = (mode, Icon, title, sub, accent) => (
@@ -769,14 +812,16 @@ export default function App() {
   const [adv, setAdv] = useState(ADV0);
   const [tab, setTab] = useState("in");
   const [view, setView] = useState("easy"); // easy | expert
+  const [wizardActive, setWizardActive] = useState(false);
 
-  // 1순위: URL hash (#s=...). 2순위: localStorage. 둘 다 없으면 모드 선택부터.
+  // 1순위: URL hash (#s=...). 2순위: localStorage. 둘 다 없으면 모드 선택 + 위저드.
   useEffect(() => {
     try {
       const m = (window.location.hash || "").match(/s=([^&]+)/);
       if (m) { loadSnapshot(dec(m[1])); return; }
       const raw = window.localStorage.getItem("fs.v1");
-      if (raw) loadSnapshot(JSON.parse(raw));
+      if (raw) { loadSnapshot(JSON.parse(raw)); return; }
+      setWizardActive(true); // 첫 방문
     } catch { /* ignore */ }
   }, []);
 
@@ -817,6 +862,9 @@ export default function App() {
   const warnings = useMemo(() => (mode ? validateInputs(common, people, adv) : []), [mode, common, people, adv]);
   const nudge = useMemo(() => (mode && eng.earliest != null ? nudgeMonthlySavings(common, people, adv, eng.earliest) : null), [mode, common, people, adv, eng.earliest]);
   if (!mode) return <ModeSelect onPick={pick} />;
+  if (wizardActive) return <Wizard people={people} setPerson={setPerson} setExp={setExp}
+    onComplete={() => { setWizardActive(false); setTab("out"); }}
+    onSkip={() => { setWizardActive(false); setTab("out"); }} />;
 
   const tabs = [
     { k: "in", label: "입력", Icon: Sliders },
