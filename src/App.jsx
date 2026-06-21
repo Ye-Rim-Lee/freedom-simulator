@@ -11,7 +11,7 @@ import { won, yAxisFmt, parseMoneyMan } from "./format.js";
 import {
   COMMON0, ME0, SPOUSE0, SOLO0, ADV0,
   equityWeight, useEngine, useMonteCarlo, validateInputs, nudgeMonthlySavings,
-  estimateNPSAnnual, estimateRetirementPensionAnnual,
+  estimateNPSAnnual, estimateRetirementPensionAnnual, computeEarliestDet,
 } from "./engine.js";
 
 /* ───────────── 공용 컴포넌트 ───────────── */
@@ -201,7 +201,7 @@ function ModeSelect({ onPick }) {
           <p className="text-slate-500 mt-2.5 text-sm leading-relaxed">소득·소비·자산을 넣으면 은퇴 가능 나이와<br />FIRE 단계별 도달 시점을 계산해요.</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-4">
-          {opt("single", User, "싱글 모드", "혼자 기준으로 계산해요.", "#4f46e5")}
+          {opt("single", User, "싱글 모드", "혼자 기준으로 계산해요.", "#059669")}
           {opt("couple", Users, "부부 모드", "두 사람 합산·개인 기준 모두 봐요.", "#059669")}
         </div>
         <p className="text-center text-[11px] text-slate-400 mt-8">모든 금액 단위는 만원 · 링크로 시나리오를 공유할 수 있어요.</p>
@@ -251,172 +251,93 @@ function Ladder({ data }) {
   );
 }
 
-/* ───────────── 쉬움 모드 결과 ───────────── */
-function EasyResults({ eng, mc, mcPending, mode, people, nudge }) {
-  const [open, setOpen] = useState(false);
-  const scopeData = eng.scope(mode === "single" ? 0 : "hh");
-  return (
-    <div className="space-y-4">
-      <MonteCarloCard mc={mc} pending={mcPending} eng={eng} nudge={nudge} />
-      <button onClick={() => setOpen((o) => !o)}
-        className="w-full rounded-xl bg-white ring-1 ring-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 flex items-center justify-between">
-        <span>{open ? "근거 접기" : "왜요? — 자세히 보기"}</span>
-        <span className="text-slate-400">{open ? "▲" : "▼"}</span>
-      </button>
-      {open && (
-        <>
-          <Card>
-            <div className="flex items-baseline justify-between mb-1">
-              <div className="text-xs font-medium text-slate-500">평균 수익률 기준 은퇴 가능 나이</div>
-            </div>
-            {eng.earliest != null ? (
-              <div className="mt-1">
-                <span className="text-4xl font-extrabold text-emerald-600 tabular-nums">{eng.earliest}</span>
-                <span className="text-xl font-bold text-emerald-600">세</span>
-                <p className="text-[12px] text-slate-500 mt-2 leading-relaxed">변동성을 무시한 단일 시나리오라 위 몬테카를로보다 낙관적이에요.</p>
-              </div>
-            ) : (
-              <p className="text-[12px] text-slate-600 mt-1">평균 시나리오도 100세까지 어려워요.</p>
-            )}
-          </Card>
-          <Card title="자산 추이 (현재 계획·평균치)" accent="#059669">
-            <RetireChart eng={eng} />
-          </Card>
-          <Card title="FIRE 단계별 도달" accent="#4f46e5">
-            <Ladder data={scopeData} />
-            <p className="text-[11px] text-slate-400 mt-3">막대 = 현재 자산이 각 단계 필요자산의 몇 %인지. 적용 SWR <b className="text-slate-600">{scopeData.swrEff?.toFixed(2)}%</b>.</p>
-          </Card>
-        </>
-      )}
-    </div>
-  );
+/* ───────────── 결과 narrative ───────────── */
+function getReadinessGrade(succPct) {
+  if (succPct == null) return { label: "—", color: "#94a3b8" };
+  const p = Math.round(succPct * 100);
+  if (p >= 90) return { label: "A · 매우 안정", color: "#059669" };
+  if (p >= 75) return { label: "B+ · 안정권", color: "#059669" };
+  if (p >= 60) return { label: "B · 양호", color: "#65a30d" };
+  if (p >= 40) return { label: "C · 보강 권장", color: "#d97706" };
+  return { label: "D · 위험", color: "#dc2626" };
 }
 
-/* ───────────── 결과 ───────────── */
-function Results({ eng, mc, mcPending, mode, people, nudge }) {
-  const [goal, setGoal] = useState("retire");
-  const [sc, setSc] = useState("hh");
-  const scopeData = eng.scope(mode === "single" ? 0 : sc);
-  const seg = (v, label, cur, set, accent) => (
-    <button onClick={() => set(v)} className="flex-1 px-3 py-2 text-sm font-semibold rounded-lg transition" style={cur === v ? { background: accent, color: "#fff" } : { color: "#64748b" }}>{label}</button>
-  );
-  return (
-    <div className="space-y-4">
-      <div className="flex gap-1 p-1 rounded-xl bg-slate-100">
-        {seg("retire", "일반 은퇴", goal, setGoal, "#059669")}
-        {seg("fire", "단계별 FIRE", goal, setGoal, "#4f46e5")}
-      </div>
-      {goal === "retire" ? (
-        <>
-          <MonteCarloCard mc={mc} pending={mcPending} eng={eng} nudge={nudge} />
-          <Card>
-            <div className="flex items-baseline justify-between mb-1">
-              <div className="text-xs font-medium text-slate-500">예상 은퇴 가능 나이 <span className="text-slate-400">· 평균 수익률 기준</span></div>
-            </div>
-            {eng.earliest != null ? (
-              <div className="mt-1">
-                <span className="text-5xl font-extrabold text-emerald-600 tabular-nums">{eng.earliest}</span>
-                <span className="text-2xl font-bold text-emerald-600">세</span>
-                <p className="text-[13px] text-slate-500 mt-2 leading-relaxed">
-                  수익률이 매년 입력한 평균값대로 나온다고 가정한 결과예요. 실제로는 위 몬테카를로의 범위로 봐주세요.
-                  {eng.base.depletedAt ? ` 현재 정년대로면 ${eng.base.depletedAt}세에 자산이 고갈돼요.` : " 현재 은퇴 계획으로도 평균 시나리오에서는 자산이 마르지 않아요."}
-                </p>
-              </div>
-            ) : (
-              <p className="text-[13px] text-slate-600 mt-2 leading-relaxed">평균 수익률 기준으로도 100세까지 유지가 어려워요. 소비를 줄이거나 소득·수익률을 높여보세요.</p>
-            )}
-          </Card>
-          <Card title="자산 추이 (현재 은퇴 계획 · 평균치)" accent="#059669">
-            <RetireChart eng={eng} />
-            <p className="text-[11px] text-slate-400 mt-2">초록 점선 = 은퇴 가능 나이 · 빨강 = 고갈 시점 · 곡선의 출렁임은 침체/둠스데이 반영</p>
-          </Card>
-        </>
-      ) : (
-        <>
-          {mode === "couple" && (
-            <div className="flex gap-1 p-1 rounded-xl bg-slate-100">
-              {seg("hh", "가구", sc, setSc, "#4f46e5")}
-              {seg(0, people[0].name, sc, setSc, "#4f46e5")}
-              {seg(1, people[1].name, sc, setSc, "#4f46e5")}
-            </div>
-          )}
-          <Card title="단계별 도달 나이 · 현재 달성률" accent="#4f46e5">
-            <Ladder data={scopeData} />
-            <p className="text-[11px] text-slate-400 mt-3">막대 = 현재 자산이 각 단계 필요자산의 몇 %인지 (현재가치). 연금은 일반 은퇴에만 반영돼요. {scopeData.swrEff != null && (<>적용 SWR = <b className="text-slate-600">{scopeData.swrEff.toFixed(2)}%</b> (은퇴 후 {scopeData.retirementYears}년).</>)}</p>
-          </Card>
-          <Card title="자산 vs FIRE 목표선" accent="#4f46e5">
-            <FireChart rows={scopeData.rows} />
-            <p className="text-[11px] text-slate-400 mt-2">자산 곡선이 각 목표선을 넘는 나이가 도달 시점이에요.</p>
-          </Card>
-        </>
-      )}
-    </div>
-  );
+function CoachingText({ eng, mc, common, adv, scopeData }) {
+  if (!mc) return <p className="text-[13px] text-slate-500">계산 중…</p>;
+  const p = Math.round(mc.successPct * 100);
+  const lines = [];
+  lines.push(`수익률이 평균 ${common.ret}% 정도이지만 매년 ±${common.vol ?? 18}% 정도 출렁인다고 가정해서 ${mc.runs.toLocaleString()}번 시뮬했어요.`);
+  if (p >= 75) lines.push("현재 계획 그대로 가도 자산이 100세까지 마르지 않을 확률이 높아요.");
+  else if (p >= 50) lines.push("절반쯤 시나리오에선 자산이 모자랄 수 있어요. 약간의 여유가 필요해요.");
+  else lines.push("위험한 시나리오가 많은 편이에요. 정년을 늦추거나 저축을 늘리는 걸 권해요.");
+  const factors = [];
+  if (common.tax?.on) factors.push("세금·건보료");
+  if ((common.fee ?? 0) > 0) factors.push(`연 운용보수 ${common.fee}%`);
+  if (common.swrAdjust && scopeData?.swrEff != null) factors.push(`은퇴기간 ${scopeData.retirementYears}년에 맞춘 SWR ${scopeData.swrEff.toFixed(1)}%`);
+  if (adv?.realEstate?.on) factors.push("부동산");
+  if (adv?.retireExp?.on) factors.push("은퇴 후 소비곡선");
+  if (factors.length) lines.push(`${factors.join("·")}을(를) 다 빼고 계산한 결과예요.`);
+  return <p className="text-[13px] text-slate-700 leading-relaxed">{lines.join(" ")}</p>;
 }
-function MonteCarloCard({ mc, pending, eng, nudge }) {
-  if (!mc) {
+
+function ActionTuners({ common, people, adv, baseEarliest }) {
+  const [save, setSave] = useState(0);
+  const [delay, setDelay] = useState(0);
+  const [cut, setCut] = useState(0);
+  const tweak = (extraSave, retDelay, expCut) => {
+    const np = people.map((p) => ({
+      ...p,
+      income: p.income + extraSave * 12,
+      retireAge: p.retireAge + retDelay,
+      exp: { ...p.exp, now: Math.max(0, Math.round(p.exp.now * (1 - expCut / 100))) },
+    }));
+    return computeEarliestDet(common, np, adv);
+  };
+  const dSave = useMemo(() => tweak(save, 0, 0), [save, common, people, adv]);
+  const dDelay = useMemo(() => tweak(0, delay, 0), [delay, common, people, adv]);
+  const dCut = useMemo(() => tweak(0, 0, cut), [cut, common, people, adv]);
+  const Action = ({ label, hint, value, onChange, min = 0, max, step, unit, prev }) => {
+    const diff = baseEarliest != null && prev != null ? baseEarliest - prev : null;
     return (
-      <Card title="몬테카를로 (수익률 변동 반영)" accent="#7c3aed" icon={Sparkles}>
-        <p className="text-[13px] text-slate-500 leading-relaxed">{pending ? "시뮬레이션 돌리는 중…" : "준비 중…"}</p>
-      </Card>
-    );
-  }
-  const { successPct, earliestByConfidence: e, bands, runs } = mc;
-  const lo = e.p85, hi = e.p50; // 보수(높은 신뢰) ~ 중앙값
-  const succColor = successPct >= 0.85 ? "#059669" : successPct >= 0.5 ? "#d97706" : "#dc2626";
-  const succLabel = successPct >= 0.85 ? "충분히 안정" : successPct >= 0.5 ? "주의 — 절반은 모자랄 수 있음" : "위험 — 더 모으거나 늦추세요";
-  return (
-    <Card title="몬테카를로 (수익률 변동 반영)" accent="#7c3aed" icon={Sparkles}>
-      <div className="flex items-baseline gap-2">
-        {lo != null && hi != null ? (
-          <>
-            <span className="text-4xl font-extrabold text-violet-700 tabular-nums">{lo}</span>
-            <span className="text-2xl font-bold text-violet-700">~</span>
-            <span className="text-4xl font-extrabold text-violet-700 tabular-nums">{hi}</span>
-            <span className="text-xl font-bold text-violet-700">세</span>
-          </>
-        ) : (
-          <span className="text-lg font-bold text-slate-500">100세까지 안정적으로 도달 어려움</span>
-        )}
-      </div>
-      <p className="text-[12px] text-slate-500 mt-1 leading-relaxed">
-        왼쪽 = <b>85% 신뢰</b>(보수적)로 은퇴 가능한 가장 이른 나이 · 오른쪽 = <b>50% 신뢰</b>(중앙값) · 평균 수익률 시나리오는 <b>{eng.earliest ?? "—"}세</b>예요.
-      </p>
-      <div className="mt-3 flex items-center gap-2">
-        <span className="text-[11px] font-semibold text-slate-500">현재 계획의 성공확률</span>
-        <span className="px-2 py-0.5 rounded-full text-[11px] font-bold tabular-nums" style={{ background: succColor + "1a", color: succColor }}>
-          {(successPct * 100).toFixed(0)}% · {succLabel}
-        </span>
-        <span className="text-[10px] text-slate-400 ml-auto tabular-nums">{runs.toLocaleString()}회 시뮬</span>
-      </div>
-      <div className="mt-3">
-        <BandChart bands={bands} earliest={eng.earliest} />
-        <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">짙은 띠 = 자산 50% 시나리오 / 옅은 띠 = 10~90%. 띠가 0에 닿으면 그 시점에 자산 고갈 위험이 생겨요. {pending && <span className="text-violet-600">· 갱신 중…</span>}</p>
-      </div>
-      {nudge && (
-        <div className="mt-3 rounded-lg bg-emerald-50 ring-1 ring-emerald-200 p-2.5 text-[12px] text-slate-700 flex items-start gap-2">
-          <span className="text-emerald-600 text-base leading-none mt-0.5">💡</span>
-          <span><b className="text-emerald-700">매달 +{nudge.monthly}만원</b> 더 모으면 (평균 시나리오 기준) 약 <b>{nudge.yearsEarlier}년</b> 더 빨리 자유로워져요.</span>
+      <div className="rounded-xl ring-1 ring-slate-200 p-3">
+        <div className="flex justify-between items-baseline mb-1">
+          <span className="text-[12px] font-semibold text-slate-700">{label}</span>
+          <span className="text-sm font-bold tabular-nums text-violet-700">{value > 0 ? `+${value}` : value}{unit}</span>
         </div>
-      )}
-    </Card>
+        <input type="range" min={min} max={max} step={step} value={value}
+          onChange={(e) => onChange(Number(e.target.value))} className="w-full accent-emerald-600" />
+        <div className="mt-1.5 text-[11px] text-slate-500 flex items-baseline justify-between">
+          <span>{hint}</span>
+          <span className="tabular-nums">
+            {value === 0 || prev == null ? "—"
+              : diff > 0 ? <><b className="text-emerald-700">{diff}년 빨라짐</b> ({prev}세)</>
+              : diff < 0 ? <><b className="text-red-600">{-diff}년 늦춰짐</b> ({prev}세)</>
+              : <>변화 없음 ({prev}세)</>}
+          </span>
+        </div>
+      </div>
+    );
+  };
+  return (
+    <div className="space-y-2.5">
+      <Action label="매달 더 모으기" hint="저축 늘리기" value={save} onChange={setSave} max={300} step={10} unit="만/월" prev={dSave} />
+      <Action label="정년 늦추기" hint="은퇴를 조금 미루기" value={delay} onChange={setDelay} max={10} step={1} unit="년" prev={dDelay} />
+      <Action label="생활비 줄이기" hint="월 지출 비율 축소" value={cut} onChange={setCut} max={30} step={1} unit="%" prev={dCut} />
+    </div>
   );
 }
 
-function BandChart({ bands, earliest }) {
-  // recharts Area는 [base, value] 형태로 두 개의 값을 줘서 누적 영역을 그릴 수 있음
-  const data = bands.map((b) => ({
-    age: b.age,
-    p10: b.p10,
-    p50: b.p50,
-    p90: b.p90,
-    iqr: [b.p10, b.p90],
-  }));
+function NarrativeChart({ bands, ageNow, ageFree, retRows }) {
+  // MC 백분위 띠 + 결정론 곡선(있으면 보조선)
+  const useMc = bands && bands.length > 0;
+  const data = useMc
+    ? bands.map((b, i) => ({ age: b.age, mid: b.p50, iqr: [b.p10, b.p90], det: retRows?.[i]?.asset ?? null }))
+    : (retRows || []).map((r) => ({ age: r.age, det: r.asset }));
   return (
-    <ResponsiveContainer width="100%" height={230}>
-      <ComposedChart data={data} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
+    <ResponsiveContainer width="100%" height={240}>
+      <ComposedChart data={data} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
         <defs>
-          <linearGradient id="bandOuter" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id="bandN" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#7c3aed" stopOpacity={0.18} />
             <stop offset="100%" stopColor="#7c3aed" stopOpacity={0.02} />
           </linearGradient>
@@ -424,44 +345,108 @@ function BandChart({ bands, earliest }) {
         <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
         <XAxis dataKey="age" tick={{ fontSize: 11, fill: "#94a3b8" }} interval={9} />
         <YAxis tickFormatter={yAxisFmt} tick={{ fontSize: 11, fill: "#94a3b8" }} width={38} />
-        <Tooltip
-          formatter={(v, n) => {
-            if (Array.isArray(v)) return [`${won(v[0])} ~ ${won(v[1])}`, n === "iqr" ? "10~90%" : n];
-            return [won(v), n];
-          }}
-          labelFormatter={(l) => `${l}세`}
-          contentStyle={{ fontSize: 12, borderRadius: 10, border: "1px solid #e2e8f0" }}
-        />
-        <Area type="monotone" dataKey="iqr" stroke="none" fill="url(#bandOuter)" name="10~90%" />
-        <Line type="monotone" dataKey="p50" stroke="#7c3aed" strokeWidth={2.5} dot={false} name="중앙값" />
-        <Line type="monotone" dataKey="p10" stroke="#a78bfa" strokeWidth={1} strokeDasharray="3 3" dot={false} name="10%" />
-        <Line type="monotone" dataKey="p90" stroke="#a78bfa" strokeWidth={1} strokeDasharray="3 3" dot={false} name="90%" />
-        {earliest != null && <ReferenceLine x={earliest} stroke="#059669" strokeDasharray="4 3" label={{ value: "평균", fontSize: 10, fill: "#059669", position: "top" }} />}
+        <Tooltip formatter={(v, n) => Array.isArray(v) ? [`${won(v[0])} ~ ${won(v[1])}`, "10~90%"] : [won(v), n === "mid" ? "중앙값" : "평균치"]}
+          labelFormatter={(l) => `${l}세`} contentStyle={{ fontSize: 12, borderRadius: 10, border: "1px solid #e2e8f0" }} />
+        {useMc && <Area type="monotone" dataKey="iqr" stroke="none" fill="url(#bandN)" name="10~90%" />}
+        {useMc && <Line type="monotone" dataKey="mid" name="중앙값" stroke="#7c3aed" strokeWidth={2.5} dot={false} />}
+        <Line type="monotone" dataKey="det" name="평균치" stroke="#059669" strokeWidth={1.6} dot={false} strokeDasharray="3 3" connectNulls={false} />
+        {ageNow != null && <ReferenceLine x={ageNow} stroke="#94a3b8" strokeDasharray="2 2" label={{ value: "지금", fontSize: 10, fill: "#64748b", position: "top" }} />}
+        {ageFree != null && <ReferenceLine x={ageFree} stroke="#059669" strokeWidth={1.5} label={{ value: "자유", fontSize: 10, fill: "#059669", position: "top" }} />}
       </ComposedChart>
     </ResponsiveContainer>
   );
 }
 
-function RetireChart({ eng }) {
-  const data = eng.base.rows.map((r) => ({ age: r.age, 자산: r.asset }));
+function NarrativeResults({ eng, mc, mcPending, mode, people, common, adv, nudge, view }) {
+  const [detailsOpen, setDetailsOpen] = useState(view === "expert");
+  const [scopeWho, setScopeWho] = useState(mode === "couple" ? "hh" : 0);
+  const scopeData = eng.scope(scopeWho);
+  const ageMain = mc?.earliestByConfidence.p50 ?? eng.earliest;
+  const ageSafe = mc?.earliestByConfidence.p85;
+  const ageNow = eng.startAge;
+  const succ = mc ? Math.round(mc.successPct * 100) : null;
+  const grade = getReadinessGrade(mc?.successPct);
+
   return (
-    <ResponsiveContainer width="100%" height={230}>
-      <ComposedChart data={data} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
-        <defs>
-          <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#059669" stopOpacity={0.25} />
-            <stop offset="100%" stopColor="#059669" stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-        <XAxis dataKey="age" tick={{ fontSize: 11, fill: "#94a3b8" }} interval={9} />
-        <YAxis tickFormatter={yAxisFmt} tick={{ fontSize: 11, fill: "#94a3b8" }} width={38} />
-        <Tooltip formatter={(v) => [won(v), "자산"]} labelFormatter={(l) => `${l}세`} contentStyle={{ fontSize: 12, borderRadius: 10, border: "1px solid #e2e8f0" }} />
-        <Area type="monotone" dataKey="자산" stroke="#059669" strokeWidth={2.5} fill="url(#g1)" connectNulls={false} />
-        {eng.earliest != null && <ReferenceLine x={eng.earliest} stroke="#059669" strokeDasharray="4 3" label={{ value: "자유", fontSize: 10, fill: "#059669", position: "top" }} />}
-        {eng.base.depletedAt && <ReferenceLine x={eng.base.depletedAt} stroke="#dc2626" strokeDasharray="4 3" label={{ value: "고갈", fontSize: 10, fill: "#dc2626", position: "top" }} />}
-      </ComposedChart>
-    </ResponsiveContainer>
+    <div className="space-y-4">
+      {/* 헤드라인 */}
+      <section className="text-center py-5 px-3">
+        <div className="text-[12px] text-slate-500 mb-2 tracking-wide">예상 은퇴 가능 나이</div>
+        {ageMain != null ? (
+          <>
+            <div className="leading-none">
+              <span className="text-7xl font-black text-slate-900 tabular-nums">{ageMain}</span>
+              <span className="text-3xl font-bold text-slate-700">세</span>
+            </div>
+            <div className="text-base text-slate-500 mt-3">자유로워질 수 있어요</div>
+            <div className="mt-3 inline-flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[12px] text-slate-500">
+              {ageSafe != null && <span>85% 확신 <b className="text-slate-700 tabular-nums">{ageSafe}세</b></span>}
+              {succ != null && (
+                <>
+                  <span className="text-slate-300">·</span>
+                  <span>준비도 <b style={{ color: grade.color }}>{grade.label}</b></span>
+                </>
+              )}
+              {mcPending && <span className="text-violet-500 text-[11px]">갱신 중…</span>}
+            </div>
+          </>
+        ) : (
+          <div className="text-base text-slate-500 leading-relaxed">현재 입력으론 100세까지 자산 유지가 어려워요. 정년·저축·수익률을 보강해 보세요.</div>
+        )}
+      </section>
+
+      {/* 자산 곡선 */}
+      <Card>
+        <NarrativeChart bands={mc?.bands} retRows={eng.base.rows} ageNow={ageNow} ageFree={ageMain} />
+        <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">보라 띠 = 수익률 변동까지 반영한 자산 범위(10~90%). 점선 = 평균 시나리오. 초록 세로선 = 자유 가능 나이.</p>
+      </Card>
+
+      {/* 왜? */}
+      <Card title="왜 이 나이일까요?">
+        <CoachingText eng={eng} mc={mc} common={common} adv={adv} scopeData={scopeData} />
+        {nudge && (
+          <div className="mt-3 rounded-lg bg-emerald-50 ring-1 ring-emerald-200 p-2.5 text-[12px] text-slate-700 flex items-start gap-2">
+            <span className="text-emerald-600 leading-none mt-0.5">💡</span>
+            <span>매달 <b className="text-emerald-700">+{nudge.monthly}만원</b> 더 모으면 평균 시나리오에서 약 <b>{nudge.yearsEarlier}년</b> 더 빨리 자유로워져요.</span>
+          </div>
+        )}
+      </Card>
+
+      {/* 액션 */}
+      <Card title="어떻게 앞당길 수 있어요?">
+        <ActionTuners common={common} people={people} adv={adv} baseEarliest={eng.earliest} />
+        <p className="text-[11px] text-slate-400 mt-3 leading-relaxed">슬라이더는 시뮬레이션용이라 위 결과는 그대로예요. 실제로 적용하려면 입력 탭에서 값을 바꿔주세요.</p>
+      </Card>
+
+      {/* 접힘 — 세부 */}
+      <button onClick={() => setDetailsOpen((o) => !o)}
+        className="w-full rounded-xl bg-white ring-1 ring-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 flex items-center justify-between">
+        <span>{detailsOpen ? "FIRE 사다리·세부 닫기" : "FIRE 사다리·세부 보기"}</span>
+        <span className="text-slate-400">{detailsOpen ? "▲" : "▼"}</span>
+      </button>
+      {detailsOpen && (
+        <>
+          {mode === "couple" && (
+            <div className="flex gap-1 p-1 rounded-xl bg-slate-100">
+              {["hh", 0, 1].map((v) => (
+                <button key={String(v)} onClick={() => setScopeWho(v)}
+                  className="flex-1 px-3 py-1.5 text-sm font-semibold rounded-lg"
+                  style={scopeWho === v ? { background: "#0f172a", color: "#fff" } : { color: "#64748b" }}>
+                  {v === "hh" ? "가구" : people[v].name}
+                </button>
+              ))}
+            </div>
+          )}
+          <Card title="FIRE 단계별 도달">
+            <Ladder data={scopeData} />
+            <p className="text-[11px] text-slate-400 mt-3 leading-relaxed">막대 = 현재 자산이 각 단계 필요자산의 몇 %인지(현재가치). {scopeData.swrEff != null && (<>적용 SWR = <b className="text-slate-600">{scopeData.swrEff.toFixed(2)}%</b> · 은퇴 후 {scopeData.retirementYears}년.</>)}</p>
+          </Card>
+          <Card title="자산 vs FIRE 목표선">
+            <FireChart rows={scopeData.rows} />
+          </Card>
+        </>
+      )}
+    </div>
   );
 }
 function FireChart({ rows }) {
@@ -538,7 +523,7 @@ function Advanced({ adv, setAdv, people, common, setCommon }) {
       </Block>
 
       <Block>
-        <Toggle on={adv.recession.on} onChange={(v) => setP("recession", { on: v })} label="경기 침체 주기" accent="#d97706" />
+        <Toggle on={adv.recession.on} onChange={(v) => setP("recession", { on: v })} label="경기 침체 주기" />
         {adv.recession.on && (
           <div className="mt-3 grid grid-cols-2 gap-3">
             <Num label="주기 (년마다)" value={adv.recession.every} onChange={(v) => setP("recession", { every: v })} unit="년" />
@@ -549,7 +534,7 @@ function Advanced({ adv, setAdv, people, common, setCommon }) {
       </Block>
 
       <Block>
-        <Toggle on={adv.children.on} onChange={(v) => setP("children", { on: v })} label="자녀 양육" accent="#0ea5e9" />
+        <Toggle on={adv.children.on} onChange={(v) => setP("children", { on: v })} label="자녀 양육" />
         {adv.children.on && (
           <div className="mt-3 space-y-2">
             <div className="grid grid-cols-[1fr_1fr_1.2fr_auto] gap-2 text-[10px] text-slate-400 font-medium px-1">
@@ -571,7 +556,7 @@ function Advanced({ adv, setAdv, people, common, setCommon }) {
       </Block>
 
       <Block>
-        <Toggle on={adv.lumps.on} onChange={(v) => setP("lumps", { on: v })} label="일회성 목돈 이벤트" accent="#7c3aed" />
+        <Toggle on={adv.lumps.on} onChange={(v) => setP("lumps", { on: v })} label="일회성 목돈 이벤트" />
         {adv.lumps.on && (
           <div className="mt-3 space-y-2">
             <div className="grid grid-cols-[1.4fr_1fr_1fr_auto] gap-2 text-[10px] text-slate-400 font-medium px-1">
@@ -593,7 +578,7 @@ function Advanced({ adv, setAdv, people, common, setCommon }) {
       </Block>
 
       <Block>
-        <Toggle on={adv.retireExp?.on || false} onChange={(v) => setP("retireExp", { on: v })} label="은퇴 후 소비곡선 (go-go → slow-go → no-go)" accent="#65a30d" />
+        <Toggle on={adv.retireExp?.on || false} onChange={(v) => setP("retireExp", { on: v })} label="은퇴 후 소비곡선 (go-go → slow-go → no-go)" />
         {adv.retireExp?.on && (
           <>
             <div className="mt-3 grid grid-cols-2 gap-3">
@@ -614,7 +599,7 @@ function Advanced({ adv, setAdv, people, common, setCommon }) {
       </Block>
 
       <Block>
-        <Toggle on={adv.realEstate?.on || false} onChange={(v) => setP("realEstate", { on: v })} label="부동산 (실거주·전세보증금)" accent="#0891b2" />
+        <Toggle on={adv.realEstate?.on || false} onChange={(v) => setP("realEstate", { on: v })} label="부동산 (실거주·전세보증금)" />
         {adv.realEstate?.on && (
           <>
             <div className="mt-3 grid grid-cols-2 gap-3">
@@ -625,7 +610,7 @@ function Advanced({ adv, setAdv, people, common, setCommon }) {
             <div className="mt-3 pl-3 border-l-2 border-cyan-100">
               <Toggle on={adv.realEstate.downsize?.on || false}
                 onChange={(v) => setP("realEstate", { downsize: { ...adv.realEstate.downsize, on: v } })}
-                label="다운사이징 (특정 나이에 현금화)" accent="#0891b2" />
+                label="다운사이징 (특정 나이에 현금화)" />
               {adv.realEstate.downsize?.on && (
                 <div className="mt-2 grid grid-cols-2 gap-3">
                   <Num label="다운사이징 나이" value={adv.realEstate.downsize.age} onChange={(v) => setP("realEstate", { downsize: { ...adv.realEstate.downsize, age: v } })} unit="세" />
@@ -637,7 +622,7 @@ function Advanced({ adv, setAdv, people, common, setCommon }) {
             <div className="mt-3 pl-3 border-l-2 border-cyan-100">
               <Toggle on={adv.realEstate.reverseMort?.on || false}
                 onChange={(v) => setP("realEstate", { reverseMort: { ...adv.realEstate.reverseMort, on: v } })}
-                label="주택연금 (역모기지)" accent="#0891b2" />
+                label="주택연금 (역모기지)" />
               {adv.realEstate.reverseMort?.on && (
                 <div className="mt-2 grid grid-cols-2 gap-3">
                   <Num label="개시 나이" value={adv.realEstate.reverseMort.startAge} onChange={(v) => setP("realEstate", { reverseMort: { ...adv.realEstate.reverseMort, startAge: v } })} unit="세" />
@@ -652,7 +637,7 @@ function Advanced({ adv, setAdv, people, common, setCommon }) {
       </Block>
 
       <Block>
-        <Toggle on={adv.doomsday.on} onChange={(v) => setP("doomsday", { on: v })} label="둠스데이 (스트레스 테스트)" accent="#dc2626" />
+        <Toggle on={adv.doomsday.on} onChange={(v) => setP("doomsday", { on: v })} label="둠스데이 (스트레스 테스트)" />
         {adv.doomsday.on && (
           <div className="mt-3 grid grid-cols-2 gap-3">
             <Num label="발생 나이 (내)" value={adv.doomsday.age} onChange={(v) => setP("doomsday", { age: v })} unit="세" />
@@ -734,7 +719,7 @@ function EasyInputs({ people, setPerson, setExp }) {
   );
   return (
     <div className="space-y-4">
-      {people.map((p, i) => personCard(p, i, i === 0 ? "#4f46e5" : "#059669"))}
+      {people.map((p, i) => personCard(p, i, "#475569"))}
       <div className="rounded-2xl bg-emerald-50 ring-1 ring-emerald-200 p-3 text-[12px] text-slate-700 leading-relaxed">
         쉬움 모드는 핵심 4개 값만 받고 나머지(정년 55세 · 수명 100세 · 수익률 7%·변동성 18% · 자산배분 110−나이 · 세금·건보료·운용보수)는 한국 평균치로 자동 채워요. 좀 더 정교하게 보고 싶으면 위 <b>전문가</b>를 눌러보세요.
       </div>
@@ -796,7 +781,7 @@ function Inputs({ common, setCommon, people, setPerson, setExp, adv, setAdv }) {
   );
   return (
     <div className="space-y-4">
-      {people.map((p, i) => personCard(p, i, i === 0 ? "#4f46e5" : "#059669"))}
+      {people.map((p, i) => personCard(p, i, "#475569"))}
       <Card title="생활비 (만원, 현재가치)" accent="#0f172a">
         <div className="text-[11px] font-semibold text-slate-400 mb-2">월 생활비</div>
         <div className="grid gap-x-3 gap-y-2" style={{ gridTemplateColumns: `auto repeat(${people.length},1fr)` }}>
@@ -1205,7 +1190,7 @@ export default function App() {
         <header className="flex items-center justify-between mb-3 no-print">
           <button onClick={() => setMode(null)} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800"><ChevronLeft size={18} /> 모드</button>
           <div className="flex items-center gap-1.5 text-sm font-bold">
-            {mode === "couple" ? <Users size={16} className="text-emerald-600" /> : <User size={16} className="text-indigo-600" />}
+            {mode === "couple" ? <Users size={16} className="text-emerald-600" /> : <User size={16} className="text-emerald-600" />}
             {mode === "couple" ? "부부 모드" : "싱글 모드"}
           </div>
           <button onClick={resetAll} className="text-[11px] text-slate-400 hover:text-red-500" title="입력값 모두 기본값으로 되돌리기">초기화</button>
@@ -1213,21 +1198,6 @@ export default function App() {
         <div className="flex justify-center gap-1 p-1 mb-3 rounded-xl bg-white ring-1 ring-slate-200 text-[12px]">
           <button onClick={() => setView("easy")} className={`flex-1 py-1.5 rounded-lg font-semibold ${view === "easy" ? "bg-emerald-600 text-white" : "text-slate-500"}`}>쉬움</button>
           <button onClick={() => setView("expert")} className={`flex-1 py-1.5 rounded-lg font-semibold ${view === "expert" ? "bg-emerald-600 text-white" : "text-slate-500"}`}>전문가</button>
-        </div>
-
-        <div className="rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-600 text-white p-4 mb-4 shadow-sm flex items-center justify-between">
-          <div>
-            <div className="text-[11px] opacity-80 flex items-center gap-1"><TrendingUp size={13} /> 예상 은퇴 가능 나이</div>
-            {mc && mc.earliestByConfidence.p85 != null && mc.earliestByConfidence.p50 != null ? (
-              <>
-                <div className="text-3xl font-extrabold tabular-nums mt-0.5">{mc.earliestByConfidence.p85}~{mc.earliestByConfidence.p50}세</div>
-                <div className="text-[11px] opacity-85 mt-0.5">성공확률 <b>{(mc.successPct * 100).toFixed(0)}%</b> · 85%↔50% 신뢰</div>
-              </>
-            ) : (
-              <div className="text-3xl font-extrabold tabular-nums mt-0.5">{eng.earliest != null ? `${eng.earliest}세` : "재검토 필요"}</div>
-            )}
-          </div>
-          <div className="text-right text-[11px] opacity-90 leading-relaxed">현재 자산<br /><b className="text-sm">{won(people.reduce((s, p) => s + (+p.asset || 0), 0))}</b><br />에서 시작</div>
         </div>
 
         {tab === "in" && (
@@ -1241,18 +1211,16 @@ export default function App() {
         )}
         {tab === "out" && (
           <div className="space-y-4">
-            {!compareActive && (
-              <button onClick={() => setCompareActive(true)} className="w-full rounded-xl bg-white ring-1 ring-violet-200 px-4 py-2.5 text-[12px] font-semibold text-violet-700 hover:bg-violet-50 flex items-center justify-center gap-1">
-                ⚖️ A/B 시나리오 비교 열기
-              </button>
-            )}
-            {view === "easy"
-              ? <EasyResults eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} nudge={nudge} />
-              : <Results eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} nudge={nudge} />}
-            {compareActive && (
+            <NarrativeResults eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people}
+              common={common} adv={adv} nudge={nudge} view={view} />
+            {compareActive ? (
               <ComparePanel common={common} eng={eng} mc={mc} engB={engB} mcB={mcB}
                 variantB={variantB} setVariantB={setVariantB}
                 onClose={() => setCompareActive(false)} />
+            ) : view === "expert" && (
+              <button onClick={() => setCompareActive(true)} className="w-full rounded-xl bg-white ring-1 ring-slate-200 px-4 py-2.5 text-[12px] font-semibold text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-1">
+                A/B 시나리오 비교 열기
+              </button>
             )}
             <div className="no-print">
               <ShareCard mc={mc} eng={eng} people={people} mode={mode} />
