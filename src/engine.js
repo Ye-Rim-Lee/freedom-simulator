@@ -6,7 +6,40 @@ export const COMMON0 = {
   ret: 7, expg: 3, infl: 2.5, swr: 4, salecost: 0.5,
   alloc: { rule: "g110", fixed: 70, safe: 3, trough: 30, end: 65 },
   vol: 18, mcRuns: 1000,
+  tax: { on: true, equityGain: 5, pension: 5, healthInsRetired: 60 },
+  fee: 0.5, swrAdjust: true,
 };
+
+// 비현실 입력·논리 오류 경고. 결과를 막지 않고 표시만 한다.
+export function validateInputs(common, people, adv) {
+  const w = [];
+  people.forEach((p, i) => {
+    const who = people.length > 1 ? `${p.name}: ` : "";
+    if (p.age < 0 || p.age > 120) w.push({ level: "error", msg: `${who}현재 나이(${p.age})가 비정상이에요.` });
+    if (p.retireAge < p.age) w.push({ level: "warn", msg: `${who}정년(${p.retireAge}세)이 현재 나이(${p.age}세)보다 빨라요. 그래도 계산은 정년부터 은퇴로 처리해요.` });
+    if (i === 0 && p.life <= p.retireAge) w.push({ level: "warn", msg: `${who}예상 수명(${p.life}세)이 정년(${p.retireAge}세) 이하예요. 은퇴 기간이 없으면 FIRE 의미가 사라져요.` });
+    if (i === 0 && p.life > 120) w.push({ level: "warn", msg: `${who}예상 수명(${p.life}세)이 너무 길어요.` });
+    if (p.asset < 0) w.push({ level: "warn", msg: `${who}현재 자산이 음수예요. 빚이라면 자산 0으로 두고 별도 고려하세요.` });
+    if (p.income < 0) w.push({ level: "error", msg: `${who}소득이 음수예요.` });
+    if (adv.pension.on && p.pensionAge < 50) w.push({ level: "warn", msg: `${who}연금 개시(${p.pensionAge}세)가 일반 수령 연령보다 일러요.` });
+  });
+  if (common.ret < 0) w.push({ level: "warn", msg: "위험자산 수익률이 음수예요." });
+  if ((common.vol ?? 0) > 30) w.push({ level: "warn", msg: `변동성(${common.vol}%)이 비현실적으로 높아요. 일반 주식은 보통 15~20%입니다.` });
+  if (common.swr > 5.5) w.push({ level: "warn", msg: `SWR(${common.swr}%)이 매우 높아요. 4% 룰을 크게 벗어나면 자산 고갈 위험이 커져요.` });
+  if (adv.recession.on && adv.recession.every < 2) w.push({ level: "warn", msg: "침체 주기가 너무 짧아요(매 1~2년마다)." });
+  if (adv.children.on) adv.children.list.forEach((c, i) => {
+    if (c.indepAge <= c.curAge) w.push({ level: "warn", msg: `자녀 ${i + 1}: 독립 나이(${c.indepAge})가 현재 나이(${c.curAge}) 이하예요.` });
+  });
+  return w;
+}
+
+// 기간보정 SWR: 30년 기준 baseSwr, 길이 1년당 0.025%p 감소, [2.5, baseSwr]로 클램프.
+export function adjustedSWR(baseSwrPct, retirementYears, on) {
+  if (!on) return baseSwrPct;
+  if (!isFinite(retirementYears) || retirementYears <= 0) return baseSwrPct;
+  const delta = Math.max(0, retirementYears - 30) * 0.025;
+  return Math.max(2.5, Math.min(baseSwrPct, baseSwrPct - delta));
+}
 export const ME0 = { name: "나", age: 34, asset: 12000, income: 7500, growth: 3, retireAge: 55, life: 100, irr: 800, pensionAge: 65, pension: 1200, exp: { now: 250, lean: 160, std: 250, fat: 480 } };
 export const SPOUSE0 = { name: "배우자", age: 32, asset: 7000, income: 5500, growth: 3, retireAge: 55, life: 100, irr: 600, pensionAge: 65, pension: 900, exp: { now: 230, lean: 150, std: 230, fat: 420 } };
 export const SOLO0 = { ...ME0, income: 6500, exp: { now: 280, lean: 190, std: 280, fat: 520 } };
@@ -47,10 +80,15 @@ export function useEngine(common, people, adv) {
     const years = endAge - startAge;
     const ret = common.ret / 100, expg = common.expg / 100, infl = common.infl / 100, swr = common.swr / 100, sc = common.salecost / 100;
     const safe = (common.alloc && common.alloc.safe != null ? common.alloc.safe : 3) / 100;
+    const fee = (common.fee || 0) / 100;
+    const tax = common.tax || { on: false, equityGain: 0, pension: 0, healthInsRetired: 0 };
+    const taxEq = tax.on ? tax.equityGain / 100 : 0;
+    const taxPen = tax.on ? tax.pension / 100 : 0;
+    const taxHI = tax.on ? (tax.healthInsRetired || 0) : 0;
     const retA0 = people[0].retireAge;
     const isRec = (t) => adv.recession.on && t > 0 && adv.recession.every > 0 && t % adv.recession.every === 0;
     const eqW = (t) => equityWeight(common.alloc, startAge + t, startAge, retA0);
-    const blended = (t) => { const w = eqW(t); const eq = isRec(t) ? -adv.recession.drop / 100 : ret; return w * eq + (1 - w) * safe; };
+    const blended = (t) => { const w = eqW(t); const eq = isRec(t) ? -adv.recession.drop / 100 : ret; return w * eq + (1 - w) * safe - fee; };
 
     function cashflow(tRet) {
       let asset = people.reduce((s, p) => s + (+p.asset || 0), 0);
@@ -58,20 +96,24 @@ export function useEngine(common, people, adv) {
       const rows = [];
       for (let t = 0; t <= years; t++) {
         const age = startAge + t;
-        let income = 0, pension = 0, expense = 0;
-        people.forEach((p) => {
+        let income = 0, pension = 0, expense = 0, anyRetired = false;
+        people.forEach((p, i) => {
           const pa = p.age + t;
           const working = tRet != null ? t < tRet : pa < p.retireAge;
           if (working) income += p.income * Math.pow(1 + p.growth / 100, t);
+          if (!working) anyRetired = true;
           if (adv.pension.on && pa >= p.pensionAge) pension += p.pension * Math.pow(1 + infl, t);
           expense += (p.exp.now * 12 + p.irr) * Math.pow(1 + expg, t);
         });
         if (adv.children.on) adv.children.list.forEach((c) => { if (c.curAge + t < c.indepAge) expense += c.cost * Math.pow(1 + infl, t); });
-        rows.push({ age, year: THIS_YEAR + t, income: Math.round(income), pension: Math.round(pension), expense: Math.round(expense), asset: asset < 0 ? null : Math.round(asset) });
+        // 은퇴 후 건강보험료(가구 합산 근사) — 한 명이라도 은퇴 상태면 추가
+        if (taxHI > 0 && anyRetired) expense += taxHI * Math.pow(1 + infl, t);
+        const pensionNet = pension * (1 - taxPen);
+        rows.push({ age, year: THIS_YEAR + t, income: Math.round(income), pension: Math.round(pensionNet), expense: Math.round(expense), asset: asset < 0 ? null : Math.round(asset) });
         if (asset < 0 && depletedAt == null) depletedAt = age;
         const invest = asset > 0 ? asset * blended(t) : 0;
-        const net = income + pension - expense;
-        const saleCost = net < 0 ? -net * sc : 0;
+        const net = income + pensionNet - expense;
+        const saleCost = net < 0 ? -net * (sc + taxEq) : 0;
         asset = asset + net + invest - saleCost;
         if (adv.lumps.on) adv.lumps.list.forEach((l) => { if (age === l.age) asset -= l.amount * Math.pow(1 + infl, t); });
         if (adv.doomsday.on && age === adv.doomsday.age) asset *= 1 - eqW(t) * adv.doomsday.drop / 100;
@@ -92,16 +134,19 @@ export function useEngine(common, people, adv) {
       const fatA = ppl.reduce((s, p) => s + p.exp.fat * 12 + p.irr, 0);
       const retA = people[0].retireAge;
       const nToRet = Math.max(retA - startAge, 0);
-      const stdAtRet = (stdA * Math.pow(1 + expg, nToRet)) / swr;
+      const retirementYears = Math.max(0, endAge - retA);
+      const swrEffPct = adjustedSWR(common.swr, retirementYears, !!common.swrAdjust);
+      const swrEff = swrEffPct / 100;
+      const stdAtRet = (stdA * Math.pow(1 + expg, nToRet)) / swrEff;
       const coastNeedToday = stdAtRet / Math.pow(1 + ret, nToRet);
       let asset = a0;
       const cross = { coast: null, barista: null, lean: null, std: null, fat: null };
       const rows = [];
       for (let t = 0; t <= years; t++) {
         const age = startAge + t;
-        const leanT = (leanA * Math.pow(1 + expg, t)) / swr;
-        const stdT = (stdA * Math.pow(1 + expg, t)) / swr;
-        const fatT = (fatA * Math.pow(1 + expg, t)) / swr;
+        const leanT = (leanA * Math.pow(1 + expg, t)) / swrEff;
+        const stdT = (stdA * Math.pow(1 + expg, t)) / swrEff;
+        const fatT = (fatA * Math.pow(1 + expg, t)) / swrEff;
         const barT = stdT * 0.5;
         const ytr = retA - age;
         const coastT = ytr > 0 ? stdAtRet / Math.pow(1 + ret, ytr) : stdT;
@@ -125,8 +170,8 @@ export function useEngine(common, people, adv) {
         if (hh && adv.lumps.on) adv.lumps.list.forEach((l) => { if (age === l.age) asset -= l.amount * Math.pow(1 + infl, t); });
         if (adv.doomsday.on && age === adv.doomsday.age) asset *= 1 - eqW(t) * adv.doomsday.drop / 100;
       }
-      const today = { coast: coastNeedToday, barista: (stdA * 0.5) / swr, lean: leanA / swr, std: stdA / swr, fat: fatA / swr };
-      return { rows, cross, today, asset0: a0 };
+      const today = { coast: coastNeedToday, barista: (stdA * 0.5) / swrEff, lean: leanA / swrEff, std: stdA / swrEff, fat: fatA / swrEff };
+      return { rows, cross, today, asset0: a0, swrEff: swrEffPct, retirementYears };
     }
     return { startAge, years, earliest, base, scope };
   }, [common, people, adv]);
@@ -161,6 +206,11 @@ function simOnePath({ retPath, common, people, adv, tRet }) {
   const years = (people[0].life || 100) - startAge;
   const expg = common.expg / 100, infl = common.infl / 100, sc = common.salecost / 100;
   const safe = (common.alloc && common.alloc.safe != null ? common.alloc.safe : 3) / 100;
+  const fee = (common.fee || 0) / 100;
+  const tax = common.tax || { on: false, equityGain: 0, pension: 0, healthInsRetired: 0 };
+  const taxEq = tax.on ? tax.equityGain / 100 : 0;
+  const taxPen = tax.on ? tax.pension / 100 : 0;
+  const taxHI = tax.on ? (tax.healthInsRetired || 0) : 0;
   const retA0 = people[0].retireAge;
 
   let asset = people.reduce((s, p) => s + (+p.asset || 0), 0);
@@ -172,23 +222,26 @@ function simOnePath({ retPath, common, people, adv, tRet }) {
     path[t] = asset < 0 ? 0 : asset;
     if (asset < 0) depleted = true;
 
-    let income = 0, pension = 0, expense = 0;
+    let income = 0, pension = 0, expense = 0, anyRetired = false;
     for (let i = 0; i < people.length; i++) {
       const p = people[i];
       const pa = p.age + t;
       const working = tRet != null ? t < tRet : pa < p.retireAge;
       if (working) income += p.income * Math.pow(1 + p.growth / 100, t);
+      if (!working) anyRetired = true;
       if (adv.pension.on && pa >= p.pensionAge) pension += p.pension * Math.pow(1 + infl, t);
       expense += (p.exp.now * 12 + p.irr) * Math.pow(1 + expg, t);
     }
     if (adv.children.on) for (const c of adv.children.list) if (c.curAge + t < c.indepAge) expense += c.cost * Math.pow(1 + infl, t);
+    if (taxHI > 0 && anyRetired) expense += taxHI * Math.pow(1 + infl, t);
 
     const w = equityWeight(common.alloc, age, startAge, retA0);
-    const eqR = retPath[t]; // 이미 N(ret, vol)에서 뽑은 값(0~1 단위)
-    const blended = w * eqR + (1 - w) * safe;
+    const eqR = retPath[t];
+    const blended = w * eqR + (1 - w) * safe - fee;
     const invest = asset > 0 ? asset * blended : 0;
-    const net = income + pension - expense;
-    const saleCost = net < 0 ? -net * sc : 0;
+    const pensionNet = pension * (1 - taxPen);
+    const net = income + pensionNet - expense;
+    const saleCost = net < 0 ? -net * (sc + taxEq) : 0;
     asset = asset + net + invest - saleCost;
     if (adv.lumps.on) for (const l of adv.lumps.list) if (age === l.age) asset -= l.amount * Math.pow(1 + infl, t);
     if (adv.doomsday.on && age === adv.doomsday.age) asset *= 1 - w * adv.doomsday.drop / 100;

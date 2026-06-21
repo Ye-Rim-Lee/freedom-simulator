@@ -10,7 +10,7 @@ import {
 import { won, yAxisFmt } from "./format.js";
 import {
   COMMON0, ME0, SPOUSE0, SOLO0, ADV0,
-  equityWeight, useEngine, useMonteCarlo,
+  equityWeight, useEngine, useMonteCarlo, validateInputs,
 } from "./engine.js";
 
 /* ───────────── 공용 컴포넌트 ───────────── */
@@ -206,7 +206,7 @@ function Results({ eng, mc, mcPending, mode, people }) {
           )}
           <Card title="단계별 도달 나이 · 현재 달성률" accent="#4f46e5">
             <Ladder data={scopeData} />
-            <p className="text-[11px] text-slate-400 mt-3">막대 = 현재 자산이 각 단계 필요자산의 몇 %인지 (현재가치). 연금은 일반 은퇴에만 반영돼요.</p>
+            <p className="text-[11px] text-slate-400 mt-3">막대 = 현재 자산이 각 단계 필요자산의 몇 %인지 (현재가치). 연금은 일반 은퇴에만 반영돼요. {scopeData.swrEff != null && (<>적용 SWR = <b className="text-slate-600">{scopeData.swrEff.toFixed(2)}%</b> (은퇴 후 {scopeData.retirementYears}년).</>)}</p>
           </Card>
           <Card title="자산 vs FIRE 목표선" accent="#4f46e5">
             <FireChart rows={scopeData.rows} />
@@ -458,6 +458,29 @@ function Advanced({ adv, setAdv, people }) {
   );
 }
 
+/* ───────────── 세금·건강보험료 카드 ───────────── */
+function TaxCard({ common, setCommon }) {
+  const tx = common.tax || { on: false, equityGain: 5, pension: 5, healthInsRetired: 60 };
+  const set = (k, v) => setCommon("tax", { ...tx, [k]: v });
+  return (
+    <Card title="세금 · 건강보험료" accent="#0f172a" icon={Sliders}>
+      <Toggle on={tx.on} onChange={(v) => set("on", v)} label="실효세율·건보료 반영" />
+      {tx.on && (
+        <>
+          <div className="grid grid-cols-2 gap-3 mt-3">
+            <Num label="자본소득 실효세율" value={tx.equityGain} onChange={(v) => set("equityGain", v)} unit="%" />
+            <Num label="연금 실효세율" value={tx.pension} onChange={(v) => set("pension", v)} unit="%" />
+            <Num label="은퇴 후 건보료" value={tx.healthInsRetired} onChange={(v) => set("healthInsRetired", v)} unit="만원/년" />
+          </div>
+          <p className="text-[11px] text-slate-400 mt-3 leading-relaxed">
+            <b>자본소득세</b>는 자산을 헐어 쓰는 해(인출)에만 인출액에 추가 차감해요(매각비용에 합산). <b>연금세</b>는 받는 연금을 그만큼 줄여서 반영. <b>건보료</b>는 가구 내 누구라도 정년이 지난 해부터 물가 따라 늘어 비용에 더해져요(피부양/지역 단순 근사). 한국 평균치 가까운 기본값(자본 5% · 연금 5% · 건보 60만원)이에요.
+          </p>
+        </>
+      )}
+    </Card>
+  );
+}
+
 /* ───────────── 자산 배분 카드 ───────────── */
 function AllocCard({ common, setCommon, age, retireAge }) {
   const a = common.alloc;
@@ -533,12 +556,37 @@ function Inputs({ common, setCommon, people, setPerson, setExp, adv, setAdv }) {
           <Slide label="물가상승률 (연)" value={common.infl} onChange={(v) => setCommon("infl", v)} min={0} max={6} step={0.1} unit="%" />
           <Slide label="인출률 SWR (연)" value={common.swr} onChange={(v) => setCommon("swr", v)} min={2.5} max={6} step={0.1} unit="%" />
           <Slide label="자산 매각비용" value={common.salecost} onChange={(v) => setCommon("salecost", v)} min={0} max={3} step={0.1} unit="%" />
+          <Slide label="연 운용보수 (펀드·ETF)" value={common.fee ?? 0.5} onChange={(v) => setCommon("fee", v)} min={0} max={2} step={0.05} unit="%" />
           <Slide label="몬테카를로 시뮬 횟수" value={common.mcRuns ?? 1000} onChange={(v) => setCommon("mcRuns", v)} min={200} max={3000} step={100} unit="회" />
         </div>
-        <p className="text-[11px] text-slate-400 mt-3 leading-relaxed">생활비 증가율 = 생활비·FIRE 목표선 상승 / 물가상승률 = 연금·자녀비·목돈 등 일반 물가 / 매각비용은 자산을 헐어 쓰는 해에만 적용돼요. <b>변동성</b>은 위험자산 수익률이 해마다 얼마나 출렁이는지(과거 S&P500 ≈ 15~18%), 몬테카를로 결과 범위에만 쓰여요.</p>
+        <div className="border-t border-slate-100 mt-4 pt-3">
+          <Toggle on={common.swrAdjust ?? true} onChange={(v) => setCommon("swrAdjust", v)} label="기간보정 SWR (은퇴 길수록 인출률 ↓)" />
+        </div>
+        <p className="text-[11px] text-slate-400 mt-3 leading-relaxed">생활비 증가율 = 생활비·FIRE 목표선 상승 / 물가상승률 = 연금·자녀비·목돈 등 일반 물가 / 매각비용은 자산을 헐어 쓰는 해에만 적용돼요. <b>변동성</b>은 위험자산 수익률이 해마다 얼마나 출렁이는지(과거 S&P500 ≈ 15~18%), 몬테카를로 결과 범위에만 쓰여요. <b>운용보수</b>는 매년 블렌디드 수익률에서 차감. <b>기간보정 SWR</b>이 켜져 있으면 은퇴 후 1년당 0.025%p씩 SWR이 자동으로 낮아져 FIRE 목표선이 보수화돼요(30년 4% → 50년 약 3.5%).</p>
       </Card>
+      <TaxCard common={common} setCommon={setCommon} />
       <AllocCard common={common} setCommon={setCommon} age={people[0].age} retireAge={people[0].retireAge} />
       <Advanced adv={adv} setAdv={setAdv} people={people} />
+    </div>
+  );
+}
+
+/* ───────────── 입력 가드레일 ───────────── */
+function Warnings({ list }) {
+  if (!list.length) return null;
+  return (
+    <div className="rounded-2xl bg-amber-50 ring-1 ring-amber-200 p-3">
+      <div className="text-xs font-bold text-amber-700 mb-1.5 flex items-center gap-1.5">
+        <span className="inline-block w-1 h-3.5 rounded-full bg-amber-500" /> 입력 점검 ({list.length})
+      </div>
+      <ul className="space-y-1">
+        {list.map((w, i) => (
+          <li key={i} className="text-[12px] leading-relaxed flex gap-1.5">
+            <span className={w.level === "error" ? "text-red-600" : "text-amber-700"}>●</span>
+            <span className="text-slate-700">{w.msg}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -615,6 +663,7 @@ export default function App() {
 
   const eng = useEngine(common, people, adv);
   const { mc, pending: mcPending } = useMonteCarlo(common, people, adv, { enabled: !!mode });
+  const warnings = useMemo(() => (mode ? validateInputs(common, people, adv) : []), [mode, common, people, adv]);
   if (!mode) return <ModeSelect onPick={pick} />;
 
   const tabs = [
@@ -651,6 +700,7 @@ export default function App() {
 
         {tab === "in" && (
           <div className="space-y-4">
+            <Warnings list={warnings} />
             <Inputs {...{ common, setCommon, people, setPerson, setExp, adv, setAdv }} />
             <Share snapshot={{ mode, common, people, adv }} onLoad={loadSnapshot} />
           </div>
