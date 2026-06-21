@@ -7,3 +7,10 @@ body { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }
+@media print {
+  body { background: #fff !important; }
+  .no-print, header, nav, [role="navigation"] { display: none !important; }
+  .bg-slate-50 { background: #fff !important; }
+  .rounded-2xl, .rounded-xl { border-radius: 0 !important; box-shadow: none !important; }
+  .ring-1, .ring-2 { box-shadow: none !important; }
+}

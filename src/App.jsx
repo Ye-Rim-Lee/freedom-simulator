@@ -868,6 +868,225 @@ function Warnings({ list }) {
   );
 }
 
+/* ───────────── 결과 공유 (이미지·PDF) ───────────── */
+function buildShareSVG({ mc, eng, people, mode }) {
+  const W = 540, H = 760;
+  const lo = mc?.earliestByConfidence.p85;
+  const hi = mc?.earliestByConfidence.p50;
+  const detAge = eng.earliest;
+  const succ = mc ? Math.round(mc.successPct * 100) : 0;
+  const succColor = succ >= 85 ? "#059669" : succ >= 50 ? "#d97706" : "#dc2626";
+
+  // 미니 차트 — 자산 p10/p50/p90
+  const bands = mc?.bands || [];
+  const padL = 40, padR = 24, chartTop = 460, chartH = 200;
+  const xMin = bands[0]?.age ?? 30;
+  const xMax = bands.at(-1)?.age ?? 100;
+  const yMax = Math.max(1, ...bands.map((b) => b.p90 || 0));
+  const xs = (x) => padL + ((x - xMin) / Math.max(1, xMax - xMin)) * (W - padL - padR);
+  const ys = (y) => chartTop + chartH - (Math.max(0, y) / yMax) * chartH;
+  const p50Path = bands.map((b, i) => `${i ? "L" : "M"}${xs(b.age).toFixed(1)},${ys(b.p50).toFixed(1)}`).join("");
+  const areaPath = bands.length
+    ? "M" + bands.map((b) => `${xs(b.age).toFixed(1)},${ys(b.p10).toFixed(1)}`).join("L")
+      + " L" + [...bands].reverse().map((b) => `${xs(b.age).toFixed(1)},${ys(b.p90).toFixed(1)}`).join("L") + " Z"
+    : "";
+
+  const headline = lo != null && hi != null ? `${lo}~${hi}세` : detAge != null ? `${detAge}세` : "재검토";
+  const subhead = lo != null && hi != null ? "85% ↔ 50% 신뢰" : "평균 결정론";
+  const totalAsset = people.reduce((s, p) => s + (+p.asset || 0), 0);
+  const peopleLines = people
+    .map((p) => `${p.name}: ${p.age}세 · 자산 ${won(p.asset)} · 월 ${p.exp.now}만 · 연소득 ${won(p.income)}`);
+  const ts = new Date().toISOString().slice(0, 10);
+  const origin = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "freedom-simulator";
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#059669" stop-opacity="1"/>
+    </linearGradient>
+  </defs>
+  <rect width="100%" height="100%" fill="#f8fafc"/>
+  <rect x="0" y="0" width="${W}" height="120" fill="url(#g)"/>
+  <text x="${padL}" y="50" font-family="system-ui,-apple-system,sans-serif" font-size="13" fill="#ecfdf5" font-weight="600">경제적 자유 시뮬레이터 · ${mode === "couple" ? "부부 모드" : "싱글 모드"}</text>
+  <text x="${padL}" y="92" font-family="system-ui,sans-serif" font-size="22" fill="#fff" font-weight="800">몇 살에 자유로워질까?</text>
+
+  <text x="${padL}" y="170" font-family="system-ui,sans-serif" font-size="13" fill="#64748b">예상 은퇴 가능 나이 · ${subhead}</text>
+  <text x="${padL}" y="234" font-family="system-ui,sans-serif" font-size="56" fill="#7c3aed" font-weight="800">${headline}</text>
+
+  <text x="${padL}" y="276" font-family="system-ui,sans-serif" font-size="13" fill="#475569">
+    현재 계획의 성공확률
+    <tspan font-weight="700" fill="${succColor}"> ${succ}%</tspan>
+    <tspan fill="#94a3b8"> · 평균치 결정론 ${detAge ?? "—"}세</tspan>
+  </text>
+
+  <text x="${padL}" y="330" font-family="system-ui,sans-serif" font-size="13" fill="#0f172a" font-weight="700">입력 요약</text>
+  <text x="${padL}" y="354" font-family="system-ui,sans-serif" font-size="12" fill="#475569">총자산 ${won(totalAsset)}에서 시작</text>
+  ${peopleLines.map((t, i) => `<text x="${padL}" y="${378 + i * 18}" font-family="system-ui,sans-serif" font-size="12" fill="#475569">${t.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text>`).join("")}
+
+  <text x="${padL}" y="${chartTop - 14}" font-family="system-ui,sans-serif" font-size="12" fill="#0f172a" font-weight="700">자산 백분위 (10·50·90)</text>
+  ${areaPath ? `<path d="${areaPath}" fill="#7c3aed" fill-opacity="0.18"/>` : ""}
+  ${p50Path ? `<path d="${p50Path}" fill="none" stroke="#7c3aed" stroke-width="2.5"/>` : ""}
+  <line x1="${padL}" y1="${chartTop + chartH}" x2="${W - padR}" y2="${chartTop + chartH}" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="${padL}" y="${chartTop + chartH + 16}" font-family="system-ui,sans-serif" font-size="10" fill="#94a3b8">${xMin}세</text>
+  <text x="${W - padR}" y="${chartTop + chartH + 16}" font-family="system-ui,sans-serif" font-size="10" fill="#94a3b8" text-anchor="end">${xMax}세</text>
+
+  <text x="${padL}" y="${H - 40}" font-family="system-ui,sans-serif" font-size="10" fill="#94a3b8">투자·세무 자문이 아닙니다. 단순 모델 — 실제는 다를 수 있어요. ${ts}</text>
+  <text x="${padL}" y="${H - 22}" font-family="system-ui,sans-serif" font-size="10" fill="#94a3b8">${origin.replace(/&/g, "&amp;")}</text>
+</svg>`;
+}
+
+function downloadSVGAsPNG(svgString, filename) {
+  const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    const scale = 2; // 2x for crisp PNG
+    const canvas = document.createElement("canvas");
+    canvas.width = img.width * scale;
+    canvas.height = img.height * scale;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    canvas.toBlob((b) => {
+      if (!b) return;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(b);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }, "image/png");
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); alert("이미지 생성에 실패했어요. 다시 시도해 주세요."); };
+  img.src = url;
+}
+
+function ShareCard({ mc, eng, people, mode }) {
+  const downloadPNG = () => {
+    const svg = buildShareSVG({ mc, eng, people, mode });
+    downloadSVGAsPNG(svg, `freedom-${mode}-${new Date().toISOString().slice(0,10)}.png`);
+  };
+  const printPDF = () => window.print();
+  return (
+    <Card title="결과 공유" accent="#0f172a" icon={Share2}>
+      <div className="grid grid-cols-2 gap-2">
+        <button onClick={downloadPNG} className="py-2.5 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">📷 이미지 저장</button>
+        <button onClick={printPDF} className="py-2.5 rounded-lg bg-white ring-1 ring-slate-300 text-sm font-semibold text-slate-700 hover:bg-slate-50">📄 PDF 인쇄</button>
+      </div>
+      <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">이미지는 카카오톡·인스타에 바로 올릴 수 있는 PNG. PDF는 브라우저 인쇄 메뉴에서 'PDF로 저장'을 선택하세요. 둘 다 면책 문구가 자동으로 들어가요.</p>
+    </Card>
+  );
+}
+
+/* ───────────── A/B 시나리오 비교 ───────────── */
+function applyVariant(common, people, adv, v) {
+  const commonB = { ...common, alloc: { ...common.alloc } };
+  const peopleB = people.map((p) => ({ ...p }));
+  if (v.retireAge != null) peopleB.forEach((p) => { p.retireAge = v.retireAge; });
+  if (v.allocRule) commonB.alloc.rule = v.allocRule;
+  if (v.ret != null) commonB.ret = v.ret;
+  if (v.vol != null) commonB.vol = v.vol;
+  if (v.swr != null) commonB.swr = v.swr;
+  if (v.fee != null) commonB.fee = v.fee;
+  return { commonB, peopleB, advB: adv };
+}
+
+function CompareRow({ label, valA, valB, unit = "" }) {
+  const better = valA != null && valB != null;
+  const diff = better ? valB - valA : null;
+  const arrow = diff == null || diff === 0 ? null : diff > 0 ? "↑" : "↓";
+  // 작은(=빠른) 은퇴 나이가 좋음. 작은(=높은) 성공률이 좋음. label에 따라 의미 다름 → diff 색은 중립으로.
+  return (
+    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 items-baseline py-1.5 border-b border-slate-100 last:border-0">
+      <span className="text-[11px] text-slate-500">{label}</span>
+      <span className="text-sm font-semibold tabular-nums text-slate-700">{valA == null ? "—" : valA}{unit}</span>
+      <span className="text-sm font-extrabold tabular-nums text-violet-700">{valB == null ? "—" : valB}{unit}</span>
+      <span className="text-[11px] tabular-nums text-slate-400 min-w-[28px] text-right">{arrow ? `${arrow}${Math.abs(diff)}` : "—"}</span>
+    </div>
+  );
+}
+
+function ComparePanel({ common, eng, mc, engB, mcB, variantB, setVariantB, onClose }) {
+  const cAge = eng.startAge;
+  const fAge = eng.startAge + eng.years;
+  const baseRetire = (eng.base.rows[0] && eng.startAge && eng.startAge) || 55;
+  const F = (k, fallback) => variantB[k] != null ? variantB[k] : fallback;
+  const set = (k, v) => setVariantB({ ...variantB, [k]: v });
+  const reset = (k) => { const n = { ...variantB }; delete n[k]; setVariantB(n); };
+  const Field = ({ label, k, valueA, unit, step = 1 }) => (
+    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 items-center">
+      <span className="text-[11px] text-slate-500">{label}</span>
+      <span className="text-[11px] text-slate-400 tabular-nums">A {valueA}{unit}</span>
+      <input type="number" step={step} value={F(k, valueA)} onChange={(e) => set(k, Number(e.target.value))}
+        className="w-20 bg-amber-50 ring-1 ring-violet-200 px-2 py-1 text-sm rounded-md tabular-nums outline-none focus:ring-2 focus:ring-violet-400" />
+      <button type="button" onClick={() => reset(k)} className={`text-[10px] ${variantB[k] != null ? "text-violet-600 hover:text-violet-800" : "text-slate-300"}`}>↻</button>
+    </div>
+  );
+  // 자산 곡선 두 라인 겹쳐 그리기 데이터
+  const overlay = eng.base.rows.map((r, i) => ({
+    age: r.age,
+    a: r.asset,
+    b: engB.base.rows[i]?.asset ?? null,
+  }));
+  return (
+    <Card title="시나리오 A vs B" accent="#7c3aed" icon={Sparkles}>
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-[11px] text-slate-500">B에 바꿀 값만 수정하세요. 빈 ↻ = A 그대로.</span>
+        <button onClick={onClose} className="text-[11px] text-slate-400 hover:text-red-500">비교 끄기</button>
+      </div>
+      <div className="space-y-2 mb-4">
+        <Field label="정년 (모두)" k="retireAge" valueA={baseRetire || 55} unit="세" />
+        <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 items-center">
+          <span className="text-[11px] text-slate-500">자산배분 규칙</span>
+          <span className="text-[11px] text-slate-400">A {common.alloc.rule}</span>
+          <select value={F("allocRule", common.alloc.rule)} onChange={(e) => set("allocRule", e.target.value)}
+            className="bg-amber-50 ring-1 ring-violet-200 px-2 py-1 text-sm rounded-md outline-none">
+            <option value="g100">g100</option>
+            <option value="g110">g110</option>
+            <option value="g120">g120</option>
+            <option value="fixed">fixed</option>
+            <option value="rising">rising</option>
+          </select>
+          <button type="button" onClick={() => reset("allocRule")} className={`text-[10px] ${variantB.allocRule != null ? "text-violet-600" : "text-slate-300"}`}>↻</button>
+        </div>
+        <Field label="수익률" k="ret" valueA={common.ret} unit="%" step={0.5} />
+        <Field label="변동성" k="vol" valueA={common.vol ?? 18} unit="%" step={1} />
+        <Field label="SWR" k="swr" valueA={common.swr} unit="%" step={0.1} />
+        <Field label="운용보수" k="fee" valueA={common.fee ?? 0.5} unit="%" step={0.05} />
+      </div>
+      <div className="rounded-lg ring-1 ring-slate-200 p-2.5 bg-slate-50">
+        <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 items-baseline pb-1 border-b border-slate-200">
+          <span className="text-[10px] text-slate-400">지표</span>
+          <span className="text-[10px] text-slate-500 font-semibold">A</span>
+          <span className="text-[10px] text-violet-700 font-bold">B</span>
+          <span className="text-[10px] text-slate-400 text-right">차</span>
+        </div>
+        <CompareRow label="평균 결정론 은퇴" valA={eng.earliest} valB={engB.earliest} unit="세" />
+        <CompareRow label="MC 85% 신뢰" valA={mc?.earliestByConfidence.p85} valB={mcB?.earliestByConfidence.p85} unit="세" />
+        <CompareRow label="MC 50% 신뢰" valA={mc?.earliestByConfidence.p50} valB={mcB?.earliestByConfidence.p50} unit="세" />
+        <CompareRow label="현 계획 성공확률" valA={mc ? Math.round(mc.successPct * 100) : null} valB={mcB ? Math.round(mcB.successPct * 100) : null} unit="%" />
+      </div>
+      <div className="mt-3">
+        <ResponsiveContainer width="100%" height={200}>
+          <ComposedChart data={overlay} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+            <XAxis dataKey="age" tick={{ fontSize: 11, fill: "#94a3b8" }} interval={9} />
+            <YAxis tickFormatter={yAxisFmt} tick={{ fontSize: 11, fill: "#94a3b8" }} width={38} />
+            <Tooltip formatter={(v, n) => [won(v), n]} labelFormatter={(l) => `${l}세`} contentStyle={{ fontSize: 12, borderRadius: 10, border: "1px solid #e2e8f0" }} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Line type="monotone" dataKey="a" name="A 자산" stroke="#059669" strokeWidth={2} dot={false} />
+            <Line type="monotone" dataKey="b" name="B 자산" stroke="#7c3aed" strokeWidth={2} dot={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      <p className="text-[10px] text-slate-400 mt-2">B 시나리오는 위 필드만 A와 다르고, 세금·고급 옵션·연금·부동산은 A와 동일하게 적용돼요.</p>
+    </Card>
+  );
+}
+
 /* ───────────── 시나리오 공유 ───────────── */
 const enc = (o) => btoa(unescape(encodeURIComponent(JSON.stringify(o))));
 const dec = (s) => JSON.parse(decodeURIComponent(escape(atob(s))));
@@ -915,6 +1134,8 @@ export default function App() {
   const [tab, setTab] = useState("in");
   const [view, setView] = useState("easy"); // easy | expert
   const [wizardActive, setWizardActive] = useState(false);
+  const [variantB, setVariantB] = useState({}); // A/B 비교용 override
+  const [compareActive, setCompareActive] = useState(false);
 
   // 1순위: URL hash (#s=...). 2순위: localStorage. 둘 다 없으면 모드 선택 + 위저드.
   useEffect(() => {
@@ -961,6 +1182,11 @@ export default function App() {
 
   const eng = useEngine(common, people, adv);
   const { mc, pending: mcPending } = useMonteCarlo(common, people, adv, { enabled: !!mode });
+
+  // B 시나리오: variantB 오버라이드를 적용한 (common, people, adv)
+  const { commonB, peopleB, advB } = useMemo(() => applyVariant(common, people, adv, variantB), [common, people, adv, variantB]);
+  const engB = useEngine(commonB, peopleB, advB);
+  const { mc: mcB } = useMonteCarlo(commonB, peopleB, advB, { enabled: !!mode && compareActive });
   const warnings = useMemo(() => (mode ? validateInputs(common, people, adv) : []), [mode, common, people, adv]);
   const nudge = useMemo(() => (mode && eng.earliest != null ? nudgeMonthlySavings(common, people, adv, eng.earliest) : null), [mode, common, people, adv, eng.earliest]);
   if (!mode) return <ModeSelect onPick={pick} />;
@@ -976,7 +1202,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900" style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <div className="max-w-xl mx-auto px-4 pb-28 pt-4">
-        <header className="flex items-center justify-between mb-3">
+        <header className="flex items-center justify-between mb-3 no-print">
           <button onClick={() => setMode(null)} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800"><ChevronLeft size={18} /> 모드</button>
           <div className="flex items-center gap-1.5 text-sm font-bold">
             {mode === "couple" ? <Users size={16} className="text-emerald-600" /> : <User size={16} className="text-indigo-600" />}
@@ -1014,14 +1240,29 @@ export default function App() {
           </div>
         )}
         {tab === "out" && (
-          view === "easy"
-            ? <EasyResults eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} nudge={nudge} />
-            : <Results eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} nudge={nudge} />
+          <div className="space-y-4">
+            {!compareActive && (
+              <button onClick={() => setCompareActive(true)} className="w-full rounded-xl bg-white ring-1 ring-violet-200 px-4 py-2.5 text-[12px] font-semibold text-violet-700 hover:bg-violet-50 flex items-center justify-center gap-1">
+                ⚖️ A/B 시나리오 비교 열기
+              </button>
+            )}
+            {view === "easy"
+              ? <EasyResults eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} nudge={nudge} />
+              : <Results eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} nudge={nudge} />}
+            {compareActive && (
+              <ComparePanel common={common} eng={eng} mc={mc} engB={engB} mcB={mcB}
+                variantB={variantB} setVariantB={setVariantB}
+                onClose={() => setCompareActive(false)} />
+            )}
+            <div className="no-print">
+              <ShareCard mc={mc} eng={eng} people={people} mode={mode} />
+            </div>
+          </div>
         )}
         {tab === "tbl" && <YearTable eng={eng} hasPension={adv.pension.on} />}
       </div>
 
-      <nav className="fixed bottom-0 inset-x-0 bg-white/90 backdrop-blur border-t border-slate-200">
+      <nav className="fixed bottom-0 inset-x-0 bg-white/90 backdrop-blur border-t border-slate-200 no-print">
         <div className="max-w-xl mx-auto flex">
           {tabs.map(({ k, label, Icon }) => (
             <button key={k} onClick={() => setTab(k)} className="flex-1 flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-medium transition" style={{ color: tab === k ? "#059669" : "#94a3b8" }}>
