@@ -251,7 +251,7 @@ function Ladder({ data }) {
 }
 
 /* ───────────── 쉬움 모드 결과 ───────────── */
-function EasyResults({ eng, mc, mcPending, mode, people }) {
+function EasyResults({ eng, mc, mcPending, mode, people, nudge }) {
   const [open, setOpen] = useState(false);
   const scopeData = eng.scope(mode === "single" ? 0 : "hh");
   return (
@@ -292,7 +292,7 @@ function EasyResults({ eng, mc, mcPending, mode, people }) {
 }
 
 /* ───────────── 결과 ───────────── */
-function Results({ eng, mc, mcPending, mode, people }) {
+function Results({ eng, mc, mcPending, mode, people, nudge }) {
   const [goal, setGoal] = useState("retire");
   const [sc, setSc] = useState("hh");
   const scopeData = eng.scope(mode === "single" ? 0 : sc);
@@ -913,8 +913,8 @@ export default function App() {
         )}
         {tab === "out" && (
           view === "easy"
-            ? <EasyResults eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} />
-            : <Results eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} />
+            ? <EasyResults eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} nudge={nudge} />
+            : <Results eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} nudge={nudge} />
         )}
         {tab === "tbl" && <YearTable eng={eng} hasPension={adv.pension.on} />}
       </div>
