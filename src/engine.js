@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 
 export const THIS_YEAR = 2026;
 
@@ -130,4 +130,169 @@ export function useEngine(common, people, adv) {
     }
     return { startAge, years, earliest, base, scope };
   }, [common, people, adv]);
+}
+
+/* ───────────── 몬테카를로 ─────────────
+   매년 위험자산 수익률을 N(ret, vol)에서 추출. 안전자산은 그대로 deterministic.
+   같은 시뮬 안에서 path를 공유한 채 tRet(은퇴까지 남은 햇수)을 0..years 탐색하여
+   각 run의 "최소 생존 가능 tRet"을 구한다. 자산 path는 현재 계획(각자 retireAge)
+   기준으로 기록해 백분위 밴드와 성공률을 산출.
+*/
+
+function gaussian() {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function quantile(sortedAsc, p) {
+  if (!sortedAsc.length) return null;
+  const idx = (sortedAsc.length - 1) * p;
+  const lo = Math.floor(idx), hi = Math.ceil(idx);
+  if (lo === hi) return sortedAsc[lo];
+  return sortedAsc[lo] + (sortedAsc[hi] - sortedAsc[lo]) * (idx - lo);
+}
+
+// 한 path(ret 시계열)로 자산이 endAge까지 살아남는지·자산 경로를 시뮬레이션.
+// tRet: 모든 사람이 t==tRet 시점부터 일을 멈춤(=== null이면 각자 retireAge 따라 자동).
+function simOnePath({ retPath, common, people, adv, tRet }) {
+  const startAge = people[0].age;
+  const years = (people[0].life || 100) - startAge;
+  const expg = common.expg / 100, infl = common.infl / 100, sc = common.salecost / 100;
+  const safe = (common.alloc && common.alloc.safe != null ? common.alloc.safe : 3) / 100;
+  const retA0 = people[0].retireAge;
+
+  let asset = people.reduce((s, p) => s + (+p.asset || 0), 0);
+  const path = new Array(years + 1);
+  let depleted = false;
+
+  for (let t = 0; t <= years; t++) {
+    const age = startAge + t;
+    path[t] = asset < 0 ? 0 : asset;
+    if (asset < 0) depleted = true;
+
+    let income = 0, pension = 0, expense = 0;
+    for (let i = 0; i < people.length; i++) {
+      const p = people[i];
+      const pa = p.age + t;
+      const working = tRet != null ? t < tRet : pa < p.retireAge;
+      if (working) income += p.income * Math.pow(1 + p.growth / 100, t);
+      if (adv.pension.on && pa >= p.pensionAge) pension += p.pension * Math.pow(1 + infl, t);
+      expense += (p.exp.now * 12 + p.irr) * Math.pow(1 + expg, t);
+    }
+    if (adv.children.on) for (const c of adv.children.list) if (c.curAge + t < c.indepAge) expense += c.cost * Math.pow(1 + infl, t);
+
+    const w = equityWeight(common.alloc, age, startAge, retA0);
+    const eqR = retPath[t]; // 이미 N(ret, vol)에서 뽑은 값(0~1 단위)
+    const blended = w * eqR + (1 - w) * safe;
+    const invest = asset > 0 ? asset * blended : 0;
+    const net = income + pension - expense;
+    const saleCost = net < 0 ? -net * sc : 0;
+    asset = asset + net + invest - saleCost;
+    if (adv.lumps.on) for (const l of adv.lumps.list) if (age === l.age) asset -= l.amount * Math.pow(1 + infl, t);
+    if (adv.doomsday.on && age === adv.doomsday.age) asset *= 1 - w * adv.doomsday.drop / 100;
+  }
+  return { path, survived: !depleted };
+}
+
+export function runMonteCarlo(common, people, adv, runs = 1000) {
+  const startAge = people[0].age;
+  const years = (people[0].life || 100) - startAge;
+  const mu = common.ret / 100;
+  const sigma = Math.max(0, (common.vol ?? 18) / 100);
+  const recOn = adv.recession.on;
+  const recEvery = adv.recession.every;
+  const recDrop = adv.recession.drop;
+
+  // (years+1) × runs 자산 경로 저장 (메모리: 1000런 × 70년 × 8B ≈ 0.6MB — OK)
+  const assetMatrix = []; // assetMatrix[t][r]
+  for (let t = 0; t <= years; t++) assetMatrix.push(new Float64Array(runs));
+  let successCnt = 0;
+  const minTRetPerRun = new Array(runs); // 각 run에서 살아남는 최소 tRet
+
+  for (let r = 0; r < runs; r++) {
+    // 한 run의 수익률 경로 공유
+    const retPath = new Array(years + 1);
+    for (let t = 0; t <= years; t++) {
+      if (recOn && t > 0 && recEvery > 0 && t % recEvery === 0) {
+        retPath[t] = -recDrop / 100;
+      } else {
+        retPath[t] = mu + sigma * gaussian();
+      }
+    }
+
+    // 현재 계획(tRet=null) 시뮬 → 백분위 밴드·성공률
+    const cur = simOnePath({ retPath, common, people, adv, tRet: null });
+    for (let t = 0; t <= years; t++) assetMatrix[t][r] = cur.path[t];
+    if (cur.survived) successCnt++;
+
+    // 최소 생존 가능 tRet: 0..years 탐색.
+    // 같은 path에서 working을 일찍 멈출수록 자산이 줄어드는 단조성이 있으므로 가장 이른 tRet만 찾으면 됨.
+    let minT = null;
+    let lo = 0, hi = years;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const ok = simOnePath({ retPath, common, people, adv, tRet: mid }).survived;
+      if (ok) { minT = mid; hi = mid - 1; } else { lo = mid + 1; }
+    }
+    minTRetPerRun[r] = minT; // null이면 never-survive
+  }
+
+  // 백분위 밴드
+  const bands = [];
+  for (let t = 0; t <= years; t++) {
+    const sorted = Array.from(assetMatrix[t]).sort((a, b) => a - b);
+    bands.push({
+      age: startAge + t,
+      p10: Math.round(quantile(sorted, 0.1)),
+      p50: Math.round(quantile(sorted, 0.5)),
+      p90: Math.round(quantile(sorted, 0.9)),
+    });
+  }
+
+  // 신뢰도별 가장 이른 은퇴 가능 나이
+  // 각 tRet 후보 a에 대해 "그 run의 minT ≤ a"인 비율 = 성공률
+  // (한 run에서 minT=k면, tRet ≥ k 모두 성공)
+  const validMins = minTRetPerRun.map((m) => (m == null ? years + 999 : m));
+  const sortedMins = validMins.slice().sort((a, b) => a - b);
+  const ageAt = (conf) => {
+    // 가장 작은 tRet a 중 P(minT ≤ a) ≥ conf 인 것
+    // = sortedMins[ceil(conf * runs) - 1]
+    const idx = Math.max(0, Math.ceil(conf * runs) - 1);
+    const m = sortedMins[idx];
+    return m > years ? null : startAge + m;
+  };
+
+  return {
+    runs,
+    startAge,
+    years,
+    successPct: successCnt / runs,
+    bands,
+    earliestByConfidence: {
+      p50: ageAt(0.5),
+      p75: ageAt(0.75),
+      p85: ageAt(0.85),
+      p95: ageAt(0.95),
+    },
+  };
+}
+
+// 무거운 계산을 입력 변화에 따라 디바운스해 실행.
+export function useMonteCarlo(common, people, adv, { enabled = true, delayMs = 250 } = {}) {
+  const [mc, setMc] = useState(null);
+  const [pending, setPending] = useState(false);
+  useEffect(() => {
+    if (!enabled) { setMc(null); return; }
+    setPending(true);
+    const id = setTimeout(() => {
+      const runs = Math.max(100, Math.min(5000, common.mcRuns || 1000));
+      const result = runMonteCarlo(common, people, adv, runs);
+      setMc(result);
+      setPending(false);
+    }, delayMs);
+    return () => clearTimeout(id);
+  }, [common, people, adv, enabled, delayMs]);
+  return { mc, pending };
 }

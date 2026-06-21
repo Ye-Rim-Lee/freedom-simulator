@@ -10,7 +10,7 @@ import {
 import { won, yAxisFmt } from "./format.js";
 import {
   COMMON0, ME0, SPOUSE0, SOLO0, ADV0,
-  equityWeight, useEngine,
+  equityWeight, useEngine, useMonteCarlo,
 } from "./engine.js";
 
 /* ───────────── 공용 컴포넌트 ───────────── */
@@ -157,7 +157,7 @@ function Ladder({ data }) {
 }
 
 /* ───────────── 결과 ───────────── */
-function Results({ eng, mode, people }) {
+function Results({ eng, mc, mcPending, mode, people }) {
   const [goal, setGoal] = useState("retire");
   const [sc, setSc] = useState("hh");
   const scopeData = eng.scope(mode === "single" ? 0 : sc);
@@ -172,22 +172,25 @@ function Results({ eng, mode, people }) {
       </div>
       {goal === "retire" ? (
         <>
+          <MonteCarloCard mc={mc} pending={mcPending} eng={eng} />
           <Card>
-            <div className="text-xs font-medium text-slate-500">예상 은퇴 가능 나이</div>
+            <div className="flex items-baseline justify-between mb-1">
+              <div className="text-xs font-medium text-slate-500">예상 은퇴 가능 나이 <span className="text-slate-400">· 평균 수익률 기준</span></div>
+            </div>
             {eng.earliest != null ? (
               <div className="mt-1">
                 <span className="text-5xl font-extrabold text-emerald-600 tabular-nums">{eng.earliest}</span>
                 <span className="text-2xl font-bold text-emerald-600">세</span>
                 <p className="text-[13px] text-slate-500 mt-2 leading-relaxed">
-                  이 나이에 일을 멈춰도 자산이 <b>{eng.startAge + eng.years}세</b>까지 마르지 않아요.
-                  {eng.base.depletedAt ? ` 단, 지금 입력한 정년대로면 ${eng.base.depletedAt}세에 자산이 고갈돼요.` : " 지금 입력한 은퇴 계획으로도 자산은 마르지 않아요."}
+                  수익률이 매년 입력한 평균값대로 나온다고 가정한 결과예요. 실제로는 위 몬테카를로의 범위로 봐주세요.
+                  {eng.base.depletedAt ? ` 현재 정년대로면 ${eng.base.depletedAt}세에 자산이 고갈돼요.` : " 현재 은퇴 계획으로도 평균 시나리오에서는 자산이 마르지 않아요."}
                 </p>
               </div>
             ) : (
-              <p className="text-[13px] text-slate-600 mt-2 leading-relaxed">현재 조건으로는 100세까지 자산을 유지하기 어려워요. 소비를 줄이거나 소득·수익률을 높여보세요.</p>
+              <p className="text-[13px] text-slate-600 mt-2 leading-relaxed">평균 수익률 기준으로도 100세까지 유지가 어려워요. 소비를 줄이거나 소득·수익률을 높여보세요.</p>
             )}
           </Card>
-          <Card title="자산 추이 (현재 은퇴 계획 기준)" accent="#059669">
+          <Card title="자산 추이 (현재 은퇴 계획 · 평균치)" accent="#059669">
             <RetireChart eng={eng} />
             <p className="text-[11px] text-slate-400 mt-2">초록 점선 = 은퇴 가능 나이 · 빨강 = 고갈 시점 · 곡선의 출렁임은 침체/둠스데이 반영</p>
           </Card>
@@ -214,6 +217,89 @@ function Results({ eng, mode, people }) {
     </div>
   );
 }
+function MonteCarloCard({ mc, pending, eng }) {
+  if (!mc) {
+    return (
+      <Card title="몬테카를로 (수익률 변동 반영)" accent="#7c3aed" icon={Sparkles}>
+        <p className="text-[13px] text-slate-500 leading-relaxed">{pending ? "시뮬레이션 돌리는 중…" : "준비 중…"}</p>
+      </Card>
+    );
+  }
+  const { successPct, earliestByConfidence: e, bands, runs } = mc;
+  const lo = e.p85, hi = e.p50; // 보수(높은 신뢰) ~ 중앙값
+  const succColor = successPct >= 0.85 ? "#059669" : successPct >= 0.5 ? "#d97706" : "#dc2626";
+  const succLabel = successPct >= 0.85 ? "안정권" : successPct >= 0.5 ? "주의" : "위험";
+  return (
+    <Card title="몬테카를로 (수익률 변동 반영)" accent="#7c3aed" icon={Sparkles}>
+      <div className="flex items-baseline gap-2">
+        {lo != null && hi != null ? (
+          <>
+            <span className="text-4xl font-extrabold text-violet-700 tabular-nums">{lo}</span>
+            <span className="text-2xl font-bold text-violet-700">~</span>
+            <span className="text-4xl font-extrabold text-violet-700 tabular-nums">{hi}</span>
+            <span className="text-xl font-bold text-violet-700">세</span>
+          </>
+        ) : (
+          <span className="text-lg font-bold text-slate-500">100세까지 안정적으로 도달 어려움</span>
+        )}
+      </div>
+      <p className="text-[12px] text-slate-500 mt-1 leading-relaxed">
+        왼쪽 = <b>85% 신뢰</b>(보수적)로 은퇴 가능한 가장 이른 나이 · 오른쪽 = <b>50% 신뢰</b>(중앙값) · 평균 수익률 시나리오는 <b>{eng.earliest ?? "—"}세</b>예요.
+      </p>
+      <div className="mt-3 flex items-center gap-2">
+        <span className="text-[11px] font-semibold text-slate-500">현재 계획의 성공확률</span>
+        <span className="px-2 py-0.5 rounded-full text-[11px] font-bold tabular-nums" style={{ background: succColor + "1a", color: succColor }}>
+          {(successPct * 100).toFixed(0)}% · {succLabel}
+        </span>
+        <span className="text-[10px] text-slate-400 ml-auto tabular-nums">{runs.toLocaleString()}회 시뮬</span>
+      </div>
+      <div className="mt-3">
+        <BandChart bands={bands} earliest={eng.earliest} />
+        <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">짙은 띠 = 자산 50% 시나리오 / 옅은 띠 = 10~90%. 띠가 0에 닿으면 그 시점에 자산 고갈 위험이 생겨요. {pending && <span className="text-violet-600">· 갱신 중…</span>}</p>
+      </div>
+    </Card>
+  );
+}
+
+function BandChart({ bands, earliest }) {
+  // recharts Area는 [base, value] 형태로 두 개의 값을 줘서 누적 영역을 그릴 수 있음
+  const data = bands.map((b) => ({
+    age: b.age,
+    p10: b.p10,
+    p50: b.p50,
+    p90: b.p90,
+    iqr: [b.p10, b.p90],
+  }));
+  return (
+    <ResponsiveContainer width="100%" height={230}>
+      <ComposedChart data={data} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
+        <defs>
+          <linearGradient id="bandOuter" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#7c3aed" stopOpacity={0.18} />
+            <stop offset="100%" stopColor="#7c3aed" stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+        <XAxis dataKey="age" tick={{ fontSize: 11, fill: "#94a3b8" }} interval={9} />
+        <YAxis tickFormatter={yAxisFmt} tick={{ fontSize: 11, fill: "#94a3b8" }} width={38} />
+        <Tooltip
+          formatter={(v, n) => {
+            if (Array.isArray(v)) return [`${won(v[0])} ~ ${won(v[1])}`, n === "iqr" ? "10~90%" : n];
+            return [won(v), n];
+          }}
+          labelFormatter={(l) => `${l}세`}
+          contentStyle={{ fontSize: 12, borderRadius: 10, border: "1px solid #e2e8f0" }}
+        />
+        <Area type="monotone" dataKey="iqr" stroke="none" fill="url(#bandOuter)" name="10~90%" />
+        <Line type="monotone" dataKey="p50" stroke="#7c3aed" strokeWidth={2.5} dot={false} name="중앙값" />
+        <Line type="monotone" dataKey="p10" stroke="#a78bfa" strokeWidth={1} strokeDasharray="3 3" dot={false} name="10%" />
+        <Line type="monotone" dataKey="p90" stroke="#a78bfa" strokeWidth={1} strokeDasharray="3 3" dot={false} name="90%" />
+        {earliest != null && <ReferenceLine x={earliest} stroke="#059669" strokeDasharray="4 3" label={{ value: "평균", fontSize: 10, fill: "#059669", position: "top" }} />}
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
 function RetireChart({ eng }) {
   const data = eng.base.rows.map((r) => ({ age: r.age, 자산: r.asset }));
   return (
@@ -441,13 +527,15 @@ function Inputs({ common, setCommon, people, setPerson, setExp, adv, setAdv }) {
       </Card>
       <Card title="투자 · 경제 가정" accent="#0f172a">
         <div className="space-y-4">
-          <Slide label="위험자산 수익률 (연)" value={common.ret} onChange={(v) => setCommon("ret", v)} min={0} max={15} step={0.5} unit="%" />
+          <Slide label="위험자산 수익률 (연평균)" value={common.ret} onChange={(v) => setCommon("ret", v)} min={0} max={15} step={0.5} unit="%" />
+          <Slide label="위험자산 변동성 (표준편차)" value={common.vol ?? 18} onChange={(v) => setCommon("vol", v)} min={0} max={35} step={1} unit="%" />
           <Slide label="생활비 증가율 (연)" value={common.expg} onChange={(v) => setCommon("expg", v)} min={0} max={8} step={0.1} unit="%" />
           <Slide label="물가상승률 (연)" value={common.infl} onChange={(v) => setCommon("infl", v)} min={0} max={6} step={0.1} unit="%" />
           <Slide label="인출률 SWR (연)" value={common.swr} onChange={(v) => setCommon("swr", v)} min={2.5} max={6} step={0.1} unit="%" />
           <Slide label="자산 매각비용" value={common.salecost} onChange={(v) => setCommon("salecost", v)} min={0} max={3} step={0.1} unit="%" />
+          <Slide label="몬테카를로 시뮬 횟수" value={common.mcRuns ?? 1000} onChange={(v) => setCommon("mcRuns", v)} min={200} max={3000} step={100} unit="회" />
         </div>
-        <p className="text-[11px] text-slate-400 mt-3">생활비 증가율 = 생활비·FIRE 목표선 상승 / 물가상승률 = 연금·자녀비·목돈 등 일반 물가 / 매각비용은 자산을 헐어 쓰는 해에만 적용돼요.</p>
+        <p className="text-[11px] text-slate-400 mt-3 leading-relaxed">생활비 증가율 = 생활비·FIRE 목표선 상승 / 물가상승률 = 연금·자녀비·목돈 등 일반 물가 / 매각비용은 자산을 헐어 쓰는 해에만 적용돼요. <b>변동성</b>은 위험자산 수익률이 해마다 얼마나 출렁이는지(과거 S&P500 ≈ 15~18%), 몬테카를로 결과 범위에만 쓰여요.</p>
       </Card>
       <AllocCard common={common} setCommon={setCommon} age={people[0].age} retireAge={people[0].retireAge} />
       <Advanced adv={adv} setAdv={setAdv} people={people} />
@@ -526,6 +614,7 @@ export default function App() {
   const setExp = (i, k, v) => setPeople((ps) => ps.map((p, j) => (j === i ? { ...p, exp: { ...p.exp, [k]: v } } : p)));
 
   const eng = useEngine(common, people, adv);
+  const { mc, pending: mcPending } = useMonteCarlo(common, people, adv, { enabled: !!mode });
   if (!mode) return <ModeSelect onPick={pick} />;
 
   const tabs = [
@@ -548,7 +637,14 @@ export default function App() {
         <div className="rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-600 text-white p-4 mb-4 shadow-sm flex items-center justify-between">
           <div>
             <div className="text-[11px] opacity-80 flex items-center gap-1"><TrendingUp size={13} /> 예상 은퇴 가능 나이</div>
-            <div className="text-3xl font-extrabold tabular-nums mt-0.5">{eng.earliest != null ? `${eng.earliest}세` : "재검토 필요"}</div>
+            {mc && mc.earliestByConfidence.p85 != null && mc.earliestByConfidence.p50 != null ? (
+              <>
+                <div className="text-3xl font-extrabold tabular-nums mt-0.5">{mc.earliestByConfidence.p85}~{mc.earliestByConfidence.p50}세</div>
+                <div className="text-[11px] opacity-85 mt-0.5">성공확률 <b>{(mc.successPct * 100).toFixed(0)}%</b> · 85%↔50% 신뢰</div>
+              </>
+            ) : (
+              <div className="text-3xl font-extrabold tabular-nums mt-0.5">{eng.earliest != null ? `${eng.earliest}세` : "재검토 필요"}</div>
+            )}
           </div>
           <div className="text-right text-[11px] opacity-90 leading-relaxed">현재 자산<br /><b className="text-sm">{won(people.reduce((s, p) => s + (+p.asset || 0), 0))}</b><br />에서 시작</div>
         </div>
@@ -559,7 +655,7 @@ export default function App() {
             <Share snapshot={{ mode, common, people, adv }} onLoad={loadSnapshot} />
           </div>
         )}
-        {tab === "out" && <Results eng={eng} mode={mode} people={people} />}
+        {tab === "out" && <Results eng={eng} mc={mc} mcPending={mcPending} mode={mode} people={people} />}
         {tab === "tbl" && <YearTable eng={eng} hasPension={adv.pension.on} />}
       </div>
 
